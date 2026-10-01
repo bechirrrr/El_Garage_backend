@@ -1,0 +1,85 @@
+// ---------------------------------------------------------------------------
+// El Garage - Modele WorkOrder (le ticket, coeur de l'application)
+// ---------------------------------------------------------------------------
+
+// Squelette de depart : statut, priorite, rattachements (garage, vehicule,
+// client, createur, mecanicien assigne) et le necessaire pour afficher un
+// ticket comme dans l'exemple de la Section 10 de la spec.
+// Diagnosis (diagnosis.prisma) et Task (task.prisma) sont deja branches ici.
+// Part, Photo, Note et ActivityHistory viendront chacun dans leur propre
+// fichier ensuite.
+
+// Workflow fixe pour le MVP (Section 11). Deviendra configurable par garage
+// plus tard, mais un enum suffit tant que ce n'est pas le cas.
+enum WorkOrderStatus {
+  RECEIVED
+  DIAGNOSIS
+  WAITING_FOR_PARTS
+  REPAIR
+  QUALITY_CHECK
+  COMPLETED
+}
+
+model WorkOrder {
+  id       String @id @default(uuid())
+  garageId String @map("garage_id")
+
+  // Numero lisible par un humain, affiche "OR-42" (Section 10 de la spec).
+  // Unique DANS un garage seulement (@@unique plus bas), jamais global.
+  // L'id (uuid) reste la vraie cle technique ; ce numero sert a l'affichage
+  // et a la recherche ("le client de l'OR-42").
+  number Int
+
+  // Le Vehicle porte deja customerId, mais on duplique customerId ici : le
+  // proprietaire au moment de la reparation doit rester fige dans l'historique
+  // meme si le vehicule change de proprietaire plus tard (revente).
+  vehicleId  String @map("vehicle_id")
+  customerId String @map("customer_id")
+
+  // Qui a ouvert le ticket (Front Desk, Admin, ou Mecanicien pour un walk-in)
+  // vs qui est assigne dessus (nullable : un ticket peut exister sans
+  // mecanicien assigne, en attendant qu'un Admin/Front Desk en choisisse un).
+  createdById        String  @map("created_by_id")
+  assignedMechanicId String? @map("assigned_mechanic_id")
+
+  mileage         Int?
+  problemReported String          @map("problem_reported")
+  status          WorkOrderStatus @default(RECEIVED)
+  priority        Priority        @default(MEDIUM)
+
+  // Creneau planifie a l'atelier -- ce qui place le ticket sur le calendrier
+  // (vue Planning, a cote des Reservations). Meme couple que
+  // Reservation.scheduledAt/durationMinutes :
+  //   - ticket issu d'une Reservation -> copie du creneau du RDV a la conversion
+  //   - walk-in -> "maintenant" par defaut (fixe par WorkOrdersService.create)
+  // Nullable uniquement pour les tickets crees avant l'ajout de ces champs
+  // (le frontend retombe alors sur createdAt). Duree nulle = 60 min affichees.
+  scheduledAt      DateTime? @map("scheduled_at")
+  estimatedMinutes Int?      @map("estimated_minutes")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  garage                 Garage          @relation(fields: [garageId], references: [id], onDelete: Cascade)
+  vehicle                Vehicle         @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  customer               Customer        @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  createdBy              User            @relation("WorkOrderCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  assignedMechanic       User?           @relation("WorkOrderAssignedTo", fields: [assignedMechanicId], references: [id], onDelete: SetNull)
+  diagnosis              Diagnosis?
+  tasks                  Task[]
+  parts                  Part[]
+  stockMovements         StockMovement[]
+  photos                 Photo[]
+  notes                  Note[]
+  activityEvents         ActivityEvent[]
+  invoice                Invoice?
+  originatingReservation Reservation?    @relation("ReservationConvertedTo")
+
+  @@unique([garageId, number])
+  @@index([garageId])
+  @@index([vehicleId])
+  @@index([customerId])
+  @@index([assignedMechanicId])
+  @@index([garageId, scheduledAt])
+  @@map("work_orders")
+}

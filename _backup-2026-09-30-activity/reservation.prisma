@@ -1,0 +1,72 @@
+// ---------------------------------------------------------------------------
+// El Garage - Modele Reservation (calendrier, Section 33)
+// ---------------------------------------------------------------------------
+
+// Flow de la spec :
+//   Front Desk cree une Reservation (customer, date/heure, motif)
+//     -> (optionnel) CONFIRMED
+//     -> le client se presente -> "Convert to Work Order"
+//        -> Reservation.status = CONVERTED, converted_work_order_id = <WO>
+//     -> si le client ne vient pas -> NO_SHOW
+//
+// Points ouverts de la spec, tranches ici pour pouvoir avancer :
+// - "Reservation liee a un Vehicle existant des le depart, ou juste
+//   customer + motif jusqu'a la conversion ?" (point ouvert #4) -> vehicleId
+//   est NULLABLE : ca couvre les deux cas (client recurrent avec vehicule
+//   deja connu, ou nouveau contact sans vehicule precise pour l'instant).
+// - Capacite journaliere du garage (point ouvert #2) et rappels SMS/email
+//   (point ouvert #3) : PAS modelises ici, restent des points ouverts /
+//   phase 2 -> pas de champs pour ca dans ce squelette.
+//
+// convertedWorkOrderId est @unique : une Reservation ne peut donner
+// naissance qu'a UN SEUL WorkOrder (le sens inverse, WorkOrder cree sans
+// Reservation pour un walk-in, reste possible : originatingReservation est
+// optionnel cote WorkOrder).
+//
+// assignedMechanicId (nullable) et durationMinutes (nullable) ajoutes
+// ensuite pour completer la vue calendrier de la Section 33 (l'exemple
+// montre explicitement le mecanicien assigne et implique une duree de
+// creneau) -- meme pattern que WorkOrder.assignedMechanicId (SetNull si le
+// mecanicien est retire) et Task.estimatedMinutes (Int optionnel, pas de
+// contrainte de precision requise pour une duree en minutes).
+
+enum ReservationStatus {
+  PENDING
+  CONFIRMED
+  CONVERTED
+  NO_SHOW
+  CANCELLED
+}
+
+model Reservation {
+  id       String @id @default(uuid())
+  garageId String @map("garage_id")
+
+  customerId String  @map("customer_id")
+  vehicleId  String? @map("vehicle_id")
+
+  scheduledAt DateTime          @map("scheduled_at")
+  reason      String
+  status      ReservationStatus @default(PENDING)
+
+  createdById          String  @map("created_by_id")
+  assignedMechanicId   String? @map("assigned_mechanic_id")
+  durationMinutes      Int?    @map("duration_minutes")
+  convertedWorkOrderId String? @unique @map("converted_work_order_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  garage             Garage     @relation(fields: [garageId], references: [id], onDelete: Cascade)
+  customer           Customer   @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  vehicle            Vehicle?   @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  createdBy          User       @relation("ReservationCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  assignedMechanic   User?      @relation("ReservationAssignedTo", fields: [assignedMechanicId], references: [id], onDelete: SetNull)
+  convertedWorkOrder WorkOrder? @relation("ReservationConvertedTo", fields: [convertedWorkOrderId], references: [id], onDelete: SetNull)
+
+  @@index([garageId])
+  @@index([customerId])
+  @@index([scheduledAt])
+  @@index([assignedMechanicId])
+  @@map("reservations")
+}

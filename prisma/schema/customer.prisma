@@ -1,0 +1,34 @@
+// ---------------------------------------------------------------------------
+// El Garage - Modele Customer (client du garage)
+// ---------------------------------------------------------------------------
+
+// Un Customer peut posseder plusieurs Vehicles (relation 1-N).
+// Comme pour Invitation, un Customer est toujours rattache a UN garage : le
+// meme numero de telephone peut donc exister dans deux garages differents
+// sans etre considere comme un doublon (isolation multi-tenant).
+
+model Customer {
+  id       String  @id @default(uuid())
+  garageId String  @map("garage_id")
+  name     String
+  phone    String?
+  email    String?
+  address  String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  garage       Garage        @relation(fields: [garageId], references: [id], onDelete: Cascade)
+  vehicles     Vehicle[]
+  workOrders   WorkOrder[]
+  invoices     Invoice[]
+  reservations Reservation[]
+  activityEvents ActivityEvent[]
+
+  // Un meme telephone ne doit pas se dupliquer DANS le meme garage.
+  // (Le champ est nullable : Postgres autorise plusieurs NULL malgre
+  // l'unicite, donc un client sans telephone renseigne ne bloque rien.)
+  @@unique([garageId, phone])
+  @@index([garageId])
+  @@map("customers")
+}

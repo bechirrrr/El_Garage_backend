@@ -1,0 +1,1207 @@
+{
+  "info": {
+    "_postman_id": "f97e9727-9d1e-4bfa-957a-5918351afa65",
+    "name": "El Garage - API",
+    "description": "Collection de test pour l'API El Garage (NestJS + Prisma). Suivre l'ordre des dossiers : Auth -> Customers -> Vehicles -> Work Orders -> Diagnosis -> Tasks. Chaque requete qui cree une ressource sauvegarde son id dans une variable d'environnement (customerId, vehicleId, workOrderId...) utilisee par les requetes suivantes.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Auth",
+      "description": "",
+      "item": [
+        {
+          "name": "Register garage (Admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/garages/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "garages",
+                "register"
+              ]
+            },
+            "description": "Cree le Garage (status PENDING_APPROVAL) + l'Admin en une seule requete. Ne renvoie PAS de token -- il faut se logger ensuite.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"garageName\": \"Speedy Auto\",\n  \"garagePhone\": \"20123456\",\n  \"garageAddress\": \"12 Avenue Habib Bourguiba, Tunis\",\n  \"adminName\": \"Bechir Marweni\",\n  \"adminEmail\": \"admin@speedy-auto.tn\",\n  \"adminPassword\": \"MotDePasse123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Login (Admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Le login reussit meme si garageStatus = PENDING_APPROVAL (le backend ne bloque pas l'API, seul le futur frontend afficherait un ecran d'attente).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@speedy-auto.tn\",\n  \"password\": \"MotDePasse123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = pm.response.json();",
+                  "if (data.accessToken) {",
+                  "    pm.environment.set('token', data.accessToken);",
+                  "    pm.environment.set('garageId', data.user.garageId);",
+                  "    console.log('Token sauvegarde dans {{token}}');",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Me (verification du token)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/auth/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "me"
+              ]
+            },
+            "description": "Doit renvoyer id/garageId/role si le token Bearer est valide -- confirme que toute la chaine JwtStrategy -> JwtAuthGuard fonctionne.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "2. Customers",
+      "description": "",
+      "item": [
+        {
+          "name": "Creer un client",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/customers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "customers"
+              ]
+            },
+            "description": "ADMIN et FRONT_DESK peuvent creer (pas MECHANIC).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Ahmed Ben Ali\",\n  \"phone\": \"22334455\",\n  \"email\": \"ahmed@example.tn\",\n  \"address\": \"Ariana\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = pm.response.json();",
+                  "if (data.id) { pm.environment.set('customerId', data.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lister les clients du garage",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/customers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "customers"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Voir un client (avec ses vehicules)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/customers/{{customerId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "customers",
+                "{{customerId}}"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Modifier un client",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/customers/{{customerId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "customers",
+                "{{customerId}}"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"address\": \"Ariana, Rue des Oliviers\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "3. Vehicles",
+      "description": "",
+      "item": [
+        {
+          "name": "Creer un vehicule",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/vehicles",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "vehicles"
+              ]
+            },
+            "description": "Les 3 roles garage-scoped peuvent creer (Admin, Front Desk, Mecanicien).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": \"{{customerId}}\",\n  \"make\": \"BMW\",\n  \"model\": \"320i\",\n  \"year\": 2018,\n  \"plate\": \"123 TUN 4567\",\n  \"vin\": \"WBA8E9C50GK123456\",\n  \"mileage\": 85000,\n  \"fuelType\": \"DIESEL\",\n  \"transmission\": \"AUTOMATIC\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = pm.response.json();",
+                  "if (data.id) { pm.environment.set('vehicleId', data.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lister les vehicules du garage",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/vehicles",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "vehicles"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Voir un vehicule",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/vehicles/{{vehicleId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "vehicles",
+                "{{vehicleId}}"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Modifier un vehicule (kilometrage)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/vehicles/{{vehicleId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "vehicles",
+                "{{vehicleId}}"
+              ]
+            },
+            "description": "Si vous etes connecte en tant que MECHANIC et que ce vehicule n'a pas ete cree par vous, attendez-vous a un 403 Forbidden.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mileage\": 85500\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "4. Work Orders",
+      "description": "",
+      "item": [
+        {
+          "name": "Ouvrir un ticket (Work Order)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/work-orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "work-orders"
+              ]
+            },
+            "description": "customerId est derive automatiquement du vehicule, pas besoin de le fournir.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"vehicleId\": \"{{vehicleId}}\",\n  \"problemReported\": \"Le moteur vibre a l'acceleration\",\n  \"mileage\": 85500,\n  \"priority\": \"HIGH\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = pm.response.json();",
+                  "if (data.id) { pm.environment.set('workOrderId', data.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lister les tickets du garage",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/work-orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "work-orders"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Voir un ticket (detail + timeline)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/work-orders/{{workOrderId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "work-orders",
+                "{{workOrderId}}"
+              ]
+            },
+            "description": "Inclut vehicle/customer/createdBy/assignedMechanic/diagnosis + la timeline activityEvents.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Modifier le contenu du ticket",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/work-orders/{{workOrderId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "work-orders",
+                "{{workOrderId}}"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"priority\": \"URGENT\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Changer le statut du ticket",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/work-orders/{{workOrderId}}/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "work-orders",
+                "{{workOrderId}}",
+                "status"
+              ]
+            },
+            "description": "Journalise un ActivityEvent SENSITIVE (STATUS_CHANGED), visible dans GET /work-orders/:id.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"DIAGNOSIS\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Assigner le ticket a un mecanicien",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/work-orders/{{workOrderId}}/assign",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "work-orders",
+                "{{workOrderId}}",
+                "assign"
+              ]
+            },
+            "description": "ADMIN/FRONT_DESK uniquement. Necessite l'id d'un User avec role=MECHANIC dans ce garage (invitez-en un via 4. Invitations, ou recuperez l'id via Prisma Studio) -- a placer dans la variable d'environnement mechanicUserId.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"assignedMechanicId\": \"{{mechanicUserId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "5. Diagnosis",
+      "description": "",
+      "item": [
+        {
+          "name": "Voir le diagnostic (null si pas encore commence)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/work-orders/{{workOrderId}}/diagnosis",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "work-orders",
+                "{{workOrderId}}",
+                "diagnosis"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Demarrer / mettre a jour le diagnostic",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/work-orders/{{workOrderId}}/diagnosis",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "work-orders",
+                "{{workOrderId}}",
+                "diagnosis"
+              ]
+            },
+            "description": "upsert : la 1ere fois journalise DIAGNOSIS_STARTED, les suivantes DIAGNOSIS_UPDATED.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerComplaint\": \"Vibration a l'acceleration, perte de puissance\",\n  \"findings\": \"Injecteur #3 a des valeurs anormales au test OBD\",\n  \"diagnosis\": \"Injecteur #3 defaillant\",\n  \"recommendation\": \"Remplacer l'injecteur #3\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Ajouter un symptome",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/work-orders/{{workOrderId}}/diagnosis/symptoms",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "work-orders",
+                "{{workOrderId}}",
+                "diagnosis",
+                "symptoms"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"label\": \"Vibration du moteur\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = pm.response.json();",
+                  "if (data.id) { pm.environment.set('symptomId', data.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cocher un symptome",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/work-orders/{{workOrderId}}/diagnosis/symptoms/{{symptomId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "work-orders",
+                "{{workOrderId}}",
+                "diagnosis",
+                "symptoms",
+                "{{symptomId}}"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"checked\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Ajouter un test de diagnostic",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/work-orders/{{workOrderId}}/diagnosis/tests",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "work-orders",
+                "{{workOrderId}}",
+                "diagnosis",
+                "tests"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"label\": \"Scan OBD\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = pm.response.json();",
+                  "if (data.id) { pm.environment.set('testId', data.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Marquer un test comme effectue",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/work-orders/{{workOrderId}}/diagnosis/tests/{{testId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "work-orders",
+                "{{workOrderId}}",
+                "diagnosis",
+                "tests",
+                "{{testId}}"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"performed\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "6. Tasks",
+      "description": "",
+      "item": [
+        {
+          "name": "Ajouter une tache",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/work-orders/{{workOrderId}}/tasks",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "work-orders",
+                "{{workOrderId}}",
+                "tasks"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"label\": \"Remplacer l'injecteur #3\",\n  \"priority\": \"HIGH\",\n  \"estimatedMinutes\": 90\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = pm.response.json();",
+                  "if (data.id) { pm.environment.set('taskId', data.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lister les taches du ticket",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/work-orders/{{workOrderId}}/tasks",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "work-orders",
+                "{{workOrderId}}",
+                "tasks"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Faire avancer une tache",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/work-orders/{{workOrderId}}/tasks/{{taskId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "work-orders",
+                "{{workOrderId}}",
+                "tasks",
+                "{{taskId}}"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"IN_PROGRESS\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Terminer une tache",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/work-orders/{{workOrderId}}/tasks/{{taskId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "work-orders",
+                "{{workOrderId}}",
+                "tasks",
+                "{{taskId}}"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"DONE\",\n  \"actualMinutes\": 75\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Supprimer une tache",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/work-orders/{{workOrderId}}/tasks/{{taskId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "work-orders",
+                "{{workOrderId}}",
+                "tasks",
+                "{{taskId}}"
+              ]
+            },
+            "description": "A utiliser avec precaution -- pas de undo.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

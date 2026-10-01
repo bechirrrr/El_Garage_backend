@@ -1,0 +1,26 @@
+# Dependances
+node_modules/
+
+# Build
+dist/
+build/
+
+# Environnement (ne JAMAIS commiter : contient mots de passe et secrets)
+.env
+.env.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Prisma
+prisma/*.db
+
+# Client Prisma genere (recree par `npx prisma generate`)
+src/generated/

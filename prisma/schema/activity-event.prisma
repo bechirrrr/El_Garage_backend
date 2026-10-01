@@ -1,0 +1,72 @@
+// ---------------------------------------------------------------------------
+// El Garage - Modele ActivityEvent (historique + audit, table unique)
+// ---------------------------------------------------------------------------
+
+// Fusionne volontairement ActivityHistory (Section 17, narratif) et le futur
+// AuditLog (Section 30bis, changements sensibles : prix/statut/assignation)
+// en UNE seule table plutot que deux, pour eviter la double ecriture a
+// chaque evenement et la desynchronisation que ca implique sous charge.
+//
+// `category` distingue les deux usages sans dupliquer le stockage :
+// - GENERAL   : alimente la timeline du ticket, visible a tous les roles
+//   concernes (Section 17 - "Diagnosis started", "Photo added"...)
+// - SENSITIVE : alimente la vue Audit Log reservee a l'Admin (Section 30bis
+//   - changement de prix, de statut, de mecanicien assigne...)
+//
+// `type` est une String libre (pas un enum) : de nouveaux types d'evenements
+// apparaitront au fil du developpement (ex. "PART_ORDERED",
+// "RESERVATION_CONVERTED"...) et une String n'exige pas de migration pour
+// en ajouter un, contrairement a un enum Prisma.
+//
+// `metadata` (Json = jsonb cote Postgres) porte les valeurs structurees
+// quand il y en a (ex. {"field":"price","old":850,"new":900}), sans avoir
+// besoin d'une colonne differente par type d'evenement.
+//
+// Deux index cibles plutot qu'un seul generique :
+// - [workOrderId, createdAt] : la timeline d'UN ticket (requete la plus
+//   frequente, un ticket a la fois)
+// - [garageId, category, createdAt] : la vue Audit Log de l'Admin, filtree
+//   sur SENSITIVE et triee, a l'echelle du garage entier
+//
+// Si un jour une contrainte reglementaire impose d'isoler physiquement
+// l'audit (stockage separe, immuabilite garantie, retention legale), migrer
+// les lignes SENSITIVE vers une vraie table AuditLog separee reste un
+// refactor simple : la forme des donnees ne change pas.
+
+enum ActivityCategory {
+  GENERAL
+  SENSITIVE
+}
+
+model ActivityEvent {
+  id          String  @id @default(uuid())
+  garageId    String  @map("garage_id")
+  /// null pour une action hors OR (client, vehicule, rendez-vous) -- voir common/activity-log.ts.
+  workOrderId String? @map("work_order_id")
+  customerId    String? @map("customer_id")
+  vehicleId     String? @map("vehicle_id")
+  reservationId String? @map("reservation_id")
+  actorId     String? @map("actor_id")
+
+  type     String
+  category ActivityCategory @default(GENERAL)
+  message  String
+  metadata Json?
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  garage    Garage    @relation(fields: [garageId], references: [id], onDelete: Cascade)
+  workOrder   WorkOrder?   @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  // SetNull : l'action reste dans le journal (son message garde le nom) meme si le client, le
+  // vehicule ou le rendez-vous est supprime ensuite.
+  customer    Customer?    @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  vehicle     Vehicle?     @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  reservation Reservation? @relation(fields: [reservationId], references: [id], onDelete: SetNull)
+  actor     User?     @relation("ActivityEventActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([workOrderId, createdAt])
+  @@index([garageId, category, createdAt])
+  // Fiche d'un membre : ses actions, les plus recentes d'abord.
+  @@index([garageId, actorId, createdAt])
+  @@map("activity_events")
+}

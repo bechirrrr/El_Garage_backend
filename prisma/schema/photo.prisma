@@ -1,0 +1,41 @@
+// ---------------------------------------------------------------------------
+// El Garage - Modele Photo
+// ---------------------------------------------------------------------------
+
+// Section 15 de la spec : des photos BEFORE / AFTER rattachees a un
+// WorkOrder ("Damaged Component" -> "Repaired Component"). `stage` est
+// nullable : toutes les photos ne rentrent pas forcement dans ce schema
+// avant/apres (ex. une photo prise juste pour illustrer le probleme au
+// milieu de la reparation), donc on ne force pas la valeur.
+//
+// `url` pointe vers le fichier stocke ailleurs (S3, Cloudinary, disque...) -
+// ce modele ne stocke jamais le binaire de l'image, juste sa reference.
+// Pas d'updatedAt volontairement : une photo n'est pas censee etre modifiee
+// une fois uploadee (si la legende change, `caption` peut evoluer, mais on
+// reste simple pour l'instant).
+
+enum PhotoStage {
+  BEFORE
+  AFTER
+}
+
+model Photo {
+  id           String @id @default(uuid())
+  garageId     String @map("garage_id")
+  workOrderId  String @map("work_order_id")
+  uploadedById String @map("uploaded_by_id")
+
+  url     String
+  caption String?
+  stage   PhotoStage?
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  garage     Garage    @relation(fields: [garageId], references: [id], onDelete: Cascade)
+  workOrder  WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  uploadedBy User      @relation("PhotoUploadedBy", fields: [uploadedById], references: [id], onDelete: Restrict)
+
+  @@index([garageId])
+  @@index([workOrderId])
+  @@map("photos")
+}

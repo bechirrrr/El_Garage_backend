@@ -1,0 +1,37 @@
+// ---------------------------------------------------------------------------
+// El Garage - Modele Invitation
+// ---------------------------------------------------------------------------
+
+// Permet a l'Admin d'ajouter un mecanicien SANS connaitre son mot de passe.
+// Le token est un secret envoye par email ; c'est le mecanicien qui choisit
+// son mot de passe en acceptant l'invitation.
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
+
+model Invitation {
+  id       String @id @default(uuid())
+  garageId String @map("garage_id")
+  email    String
+  name     String
+  role     Role   @default(MECHANIC)
+
+  token     String           @unique
+  status    InvitationStatus @default(PENDING)
+  expiresAt DateTime         @map("expires_at")
+
+  invitedById String    @map("invited_by_id")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  acceptedAt  DateTime? @map("accepted_at")
+
+  garage    Garage @relation(fields: [garageId], references: [id], onDelete: Cascade)
+  invitedBy User   @relation("InvitedBy", fields: [invitedById], references: [id])
+
+  @@unique([garageId, email])
+  @@index([garageId])
+  @@map("invitations")
+}

@@ -1,0 +1,33 @@
+// ---------------------------------------------------------------------------
+// El Garage - Modele Note
+// ---------------------------------------------------------------------------
+
+// Section 16 de la spec : un journal horodate de remarques libres sur un
+// WorkOrder ("10:42 Injector #3 values are abnormal.", "14:30 New injector
+// received.", ...). Append-only par nature : pas d'updatedAt, une Note
+// n'est pas censee etre editee apres coup (si une correction est necessaire,
+// on ajoute une nouvelle Note plutot que de reecrire l'historique).
+//
+// A ne pas confondre avec ActivityHistory (Section 17, pas encore modelise) :
+// Note est ecrite volontairement par un humain ("j'ai remarque que..."),
+// ActivityHistory sera generee automatiquement par le systeme a chaque
+// evenement ("10:05 Diagnosis started").
+
+model Note {
+  id          String @id @default(uuid())
+  garageId    String @map("garage_id")
+  workOrderId String @map("work_order_id")
+  authorId    String @map("author_id")
+
+  content String
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  garage    Garage    @relation(fields: [garageId], references: [id], onDelete: Cascade)
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  author    User      @relation("NoteAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+
+  @@index([garageId])
+  @@index([workOrderId])
+  @@map("notes")
+}

@@ -1,0 +1,55 @@
+// ---------------------------------------------------------------------------
+// El Garage - Modele Task (checklist de travaux d'un WorkOrder)
+// ---------------------------------------------------------------------------
+
+// Section 12 de la spec : une liste de taches a cocher/progresser au sein
+// d'un WorkOrder (ex. "Remove Injector", "Road Test"...). Contrairement a
+// Symptom/DiagnosticTest (simple case a cocher), une Task a son propre
+// statut a 3 valeurs (les symboles ✓ / 🔄 / ⬜ de l'exemple), peut etre
+// assignee a un Mecanicien specifique, et suit un temps estime vs reel.
+//
+// `notes` reste un simple champ texte ici (pas de relation vers un futur
+// modele Note) : c'est une remarque rapide sur CETTE tache, a distinguer du
+// futur modele Note (Section 16) qui sera le journal chronologique du
+// WorkOrder entier. Meme logique pour les Photos : pas encore de relation
+// Task <-> Photo tant que le modele Photo n'existe pas.
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  DONE
+}
+
+model Task {
+  id          String @id @default(uuid())
+  garageId    String @map("garage_id")
+  workOrderId String @map("work_order_id")
+
+  assignedMechanicId String? @map("assigned_mechanic_id")
+
+  label  String
+  status TaskStatus @default(TODO)
+
+  // Nullable : la spec dit que la priorite est un ajout "eventuel" sur une
+  // Task (contrairement a WorkOrder ou la priorite existe des la creation).
+  priority Priority?
+
+  estimatedMinutes Int?    @map("estimated_minutes")
+  actualMinutes    Int?    @map("actual_minutes")
+  notes            String?
+
+  // Position dans la checklist pour un affichage/reordering stable.
+  order Int @default(0)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  garage           Garage    @relation(fields: [garageId], references: [id], onDelete: Cascade)
+  workOrder        WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  assignedMechanic User?     @relation("TaskAssignedTo", fields: [assignedMechanicId], references: [id], onDelete: SetNull)
+
+  @@index([garageId])
+  @@index([workOrderId])
+  @@index([assignedMechanicId])
+  @@map("tasks")
+}

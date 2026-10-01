@@ -1,0 +1,87 @@
+// ---------------------------------------------------------------------------
+// El Garage - Modele Garage (le tenant)
+// ---------------------------------------------------------------------------
+
+// GARAGE = la racine du multi-tenant. Toute entite metier pointe vers lui.
+// Chaque entite metier a un garageId et une relation vers ce modele.
+//
+// Section 28 : un Garage nait en PENDING_APPROVAL (cree par l'Admin lors de
+// l'inscription), et seul un OWNER peut le faire passer a ACTIVE/REJECTED,
+// puis eventuellement SUSPENDED/ACTIVE (Owner Console). Tant qu'un Garage
+// n'est pas ACTIVE, son Admin ne doit pas acceder au Dashboard (regle
+// applicative, pas une contrainte de schema).
+//
+// reviewedById/reviewedAt tracent le dernier OWNER a avoir change le statut
+// et quand -- pas un historique complet des changements (un Garage change
+// de statut rarement, contrairement a un WorkOrder), juste le dernier etat
+// connu. Nullable : un Garage tout juste cree n'a pas encore ete revu.
+
+enum GarageStatus {
+  PENDING_APPROVAL
+  ACTIVE
+  SUSPENDED
+  REJECTED
+}
+
+model Garage {
+  id      String       @id @default(uuid())
+  name    String
+  phone   String?
+  address String?
+  status  GarageStatus @default(PENDING_APPROVAL)
+
+  // Compteur des numeros d'ordre de reparation de CE garage (OR-1, OR-2...).
+  // Chaque garage a sa propre suite : le garage B ne "voit" pas les numeros
+  // du garage A. Incremente de facon atomique a la creation d'un WorkOrder
+  // (voir src/common/work-order-number.ts) : la valeur = dernier numero attribue.
+  workOrderCounter Int @default(0) @map("work_order_counter")
+
+  // --- Parametres du garage (ecran Parametres, ADMIN) ---------------------
+  email String?
+  /// Matricule fiscal, imprime sur les factures et les recus.
+  taxId String? @map("tax_id")
+  /// 7 jours, lundi d'abord : [{ open, from: "08:00", to: "18:00" }, ...].
+  /// null = horaires par defaut (voir src/common/opening-hours.ts).
+  openingHours Json? @map("opening_hours")
+  /// Capacite journaliere d'un mecanicien (charge, jauge d'occupation).
+  mechanicHoursPerDay Int @default(8) @map("mechanic_hours_per_day")
+  defaultAppointmentMinutes Int @default(60) @map("default_appointment_minutes")
+  /// Taille d'un creneau dans la grille du planning.
+  planningSlotMinutes Int @default(30) @map("planning_slot_minutes")
+  /// Echeance proposee a la creation d'une facture.
+  invoiceDueDays Int @default(30) @map("invoice_due_days")
+  invoiceFooter String? @map("invoice_footer")
+  /// TVA (Tunisie : 19 %). Copiee sur chaque facture a sa creation.
+  vatEnabled Boolean @default(true) @map("vat_enabled")
+  vatRate    Decimal @default(19) @map("vat_rate") @db.Decimal(5, 2)
+  /// Timbre fiscal ajoute a chaque facture (hors TVA).
+  stampDutyEnabled Boolean @default(true) @map("stamp_duty_enabled")
+  stampDuty        Decimal @default(1) @map("stamp_duty") @db.Decimal(12, 3)
+
+  reviewedById String?   @map("reviewed_by_id")
+  reviewedAt   DateTime? @map("reviewed_at")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations : ajouter ici chaque nouvelle collection du garage
+  users          User[]
+  reviewedBy     User?           @relation("GarageReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  invitations    Invitation[]
+  customers      Customer[]
+  vehicles       Vehicle[]
+  workOrders     WorkOrder[]
+  diagnoses      Diagnosis[]
+  tasks          Task[]
+  parts          Part[]
+  photos         Photo[]
+  notes          Note[]
+  activityEvents ActivityEvent[]
+  invoices       Invoice[]
+  payments       Payment[]
+  reservations   Reservation[]
+  stockItems     StockItem[]
+  stockMovements StockMovement[]
+
+  @@map("garages")
+}

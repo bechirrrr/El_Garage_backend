@@ -1,0 +1,71 @@
+// ---------------------------------------------------------------------------
+// El Garage - Modele Diagnosis (+ ses deux checklists)
+// ---------------------------------------------------------------------------
+
+// Diagnosis structure ce qui, dans un garage papier, seraient juste des
+// notes en vrac (Section 13). Relation 1-1 avec WorkOrder : @unique sur
+// workOrderId garantit qu'un ticket n'a jamais plus d'un Diagnosis.
+// Il est optionnel cote WorkOrder (diagnosis Diagnosis?) car un ticket qui
+// vient d'etre RECEIVED n'a pas encore de diagnostic.
+//
+// Symptoms et Diagnostic Tests sont deux checklists distinctes dans
+// l'exemple de la spec ("Symptoms: engine vibration, loss of power..." vs
+// "Diagnostic Tests: OBD Scan, Injector Test..."), donc deux petits modeles
+// separes plutot qu'un seul generique : chaque ligne est juste un libelle +
+// une case a cocher, ajoutee/cochee librement par le Mecanicien.
+
+model Diagnosis {
+  id       String @id @default(uuid())
+  garageId String @map("garage_id")
+
+  // 1-1 avec WorkOrder : @unique cote FK, pas de champ separe cote WorkOrder.
+  workOrderId String @unique @map("work_order_id")
+
+  // Decision (flux ticket, cote frontend) : la plainte du client est saisie
+  // UNE SEULE FOIS, a l'ouverture du ticket (WorkOrder.problemReported) --
+  // ce n'est pas au Mecanicien de la re-saisir au moment du diagnostic.
+  // customerComplaint est donc rempli automatiquement depuis
+  // WorkOrder.problemReported au moment de l'upsert (voir DiagnosisService
+  // ou WorkOrderDetail cote frontend), jamais redemande a l'utilisateur --
+  // le champ reste nullable ici uniquement parce qu'un Diagnosis cree avant
+  // ce choix peut ne pas l'avoir.
+  customerComplaint String? @map("customer_complaint")
+  findings          String?
+  diagnosis         String?
+  recommendation    String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  garage          Garage           @relation(fields: [garageId], references: [id], onDelete: Cascade)
+  workOrder       WorkOrder        @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  symptoms        Symptom[]
+  diagnosticTests DiagnosticTest[]
+
+  @@index([garageId])
+  @@map("diagnoses")
+}
+
+model Symptom {
+  id          String  @id @default(uuid())
+  diagnosisId String  @map("diagnosis_id")
+  label       String
+  checked     Boolean @default(false)
+
+  diagnosis Diagnosis @relation(fields: [diagnosisId], references: [id], onDelete: Cascade)
+
+  @@index([diagnosisId])
+  @@map("symptoms")
+}
+
+model DiagnosticTest {
+  id          String  @id @default(uuid())
+  diagnosisId String  @map("diagnosis_id")
+  label       String
+  performed   Boolean @default(false)
+
+  diagnosis Diagnosis @relation(fields: [diagnosisId], references: [id], onDelete: Cascade)
+
+  @@index([diagnosisId])
+  @@map("diagnostic_tests")
+}

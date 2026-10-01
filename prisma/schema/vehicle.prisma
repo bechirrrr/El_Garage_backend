@@ -1,0 +1,57 @@
+// ---------------------------------------------------------------------------
+// El Garage - Modele Vehicle
+// ---------------------------------------------------------------------------
+
+// Un Vehicle appartient a un Customer et a plusieurs WorkOrders au fil du
+// temps (relation 1-N, voir work-order.prisma).
+//
+// createdById trace le User qui a cree la fiche : c'est ce qui permettra
+// plus tard de restreindre un Mecanicien aux vehicules qu'il a lui-meme
+// crees (regle metier de la Section 9 de la spec).
+
+enum FuelType {
+  PETROL
+  DIESEL
+  HYBRID
+  ELECTRIC
+  OTHER
+}
+
+enum Transmission {
+  MANUAL
+  AUTOMATIC
+}
+
+model Vehicle {
+  id          String @id @default(uuid())
+  garageId    String @map("garage_id")
+  customerId  String @map("customer_id")
+  createdById String @map("created_by_id")
+
+  make         String
+  model        String
+  year         Int?
+  plate        String
+  vin          String?       @unique
+  mileage      Int?
+  fuelType     FuelType?     @map("fuel_type")
+  engineSize   String?       @map("engine_size")
+  transmission Transmission?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  garage    Garage   @relation(fields: [garageId], references: [id], onDelete: Cascade)
+  customer  Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  createdBy User     @relation("VehicleCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  workOrders   WorkOrder[]
+  reservations Reservation[]
+  activityEvents ActivityEvent[]
+
+  // La meme plaque ne doit pas exister deux fois dans le meme garage.
+  @@unique([garageId, plate])
+  @@index([garageId])
+  @@index([customerId])
+  @@map("vehicles")
+}

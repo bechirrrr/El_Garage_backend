@@ -1,0 +1,53 @@
+// ---------------------------------------------------------------------------
+// El Garage - Modele User (Admin, Mecanicien, Front Desk, Owner)
+// ---------------------------------------------------------------------------
+
+// Une seule entite pour tous les roles (ADMIN, MECHANIC, FRONT_DESK, OWNER),
+// differenciee par `role`.
+//
+// garageId est NULLABLE : c'est le seul cas ou il l'est dans tout le schema.
+// Un OWNER (le proprietaire de la plateforme El Garage elle-meme) n'appartient
+// a aucun garage precis, contrairement a ADMIN / MECHANIC / FRONT_DESK qui en
+// ont toujours un. Cote code, ca veut dire garder un garde-fou explicite :
+// "si role === OWNER, garageId doit etre null ; sinon il est obligatoire."
+//
+// Authentification hybride : passwordHash ET googleId sont nullables et
+// peuvent coexister sur la meme ligne. C'est ce qui evite les comptes en
+// double quand quelqu'un s'inscrit par email puis se connecte via Google.
+
+model User {
+  id           String  @id @default(uuid())
+  garageId     String? @map("garage_id")
+  email        String  @unique
+  name         String
+  role         Role    @default(MECHANIC)
+  passwordHash String? @map("password_hash")
+  googleId     String? @unique @map("google_id")
+  isActive     Boolean @default(true) @map("is_active")
+  /// Vrai quand le compte a ete cree par un Admin avec un mot de passe provisoire :
+  /// l'utilisateur doit le changer a sa premiere connexion (voir AuthService.changePassword).
+  mustChangePassword Boolean @default(false) @map("must_change_password")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  garage          Garage?      @relation(fields: [garageId], references: [id], onDelete: Cascade)
+  sentInvitations Invitation[] @relation("InvitedBy")
+  vehiclesCreated Vehicle[]    @relation("VehicleCreatedBy")
+
+  workOrdersCreated   WorkOrder[]     @relation("WorkOrderCreatedBy")
+  workOrdersAssigned  WorkOrder[]     @relation("WorkOrderAssignedTo")
+  tasksAssigned       Task[]          @relation("TaskAssignedTo")
+  photosUploaded      Photo[]         @relation("PhotoUploadedBy")
+  notesAuthored       Note[]          @relation("NoteAuthor")
+  activityEvents      ActivityEvent[] @relation("ActivityEventActor")
+  invoicesIssued      Invoice[]       @relation("InvoiceIssuedBy")
+  paymentsRecorded    Payment[]       @relation("PaymentRecordedBy")
+  reservationsCreated Reservation[]   @relation("ReservationCreatedBy")
+  reservationsAssigned Reservation[]  @relation("ReservationAssignedTo")
+  garagesReviewed     Garage[]        @relation("GarageReviewedBy")
+
+  // Toutes nos requetes filtreront sur garageId : index des le depart.
+  @@index([garageId])
+  @@map("users")
+}

@@ -1,0 +1,83 @@
+// ---------------------------------------------------------------------------
+// El Garage - Stock de pieces de rechange (ecran Pieces > Stock)
+// ---------------------------------------------------------------------------
+
+// Le garage tient un stock de pieces (huile, filtres, plaquettes...) qu'il
+// pose et facture dans ses OR. Le stock est automatique :
+// - une piece du stock ajoutee a un OR fait baisser la quantite (OUT),
+// - retiree de l'OR, elle revient en stock (RETURN),
+// - une livraison fournisseur la fait monter (IN),
+// - une correction d'inventaire la fixe a la valeur comptee (ADJUST).
+// Chaque mouvement est garde (StockMovement) : qui, quand, quel OR.
+
+enum StockMovementType {
+  IN
+  OUT
+  RETURN
+  ADJUST
+}
+
+model StockItem {
+  id       String  @id @default(uuid())
+  garageId String  @map("garage_id")
+
+  name      String
+  /// Code interne ou reference fabricant (unique dans le garage).
+  reference String?
+  brand     String?
+  category  String?
+  /// Etagere, tiroir...
+  location  String?
+  /// "L", "pc", "jeu", "paire", "kg"...
+  unit      String  @default("pc")
+  supplier  String?
+
+  quantity    Decimal @default(0) @db.Decimal(10, 2)
+  /// En dessous (ou egal) : "Stock bas".
+  minQuantity Decimal @default(0) @map("min_quantity") @db.Decimal(10, 2)
+
+  purchasePrice Decimal @default(0) @map("purchase_price") @db.Decimal(12, 3)
+  /// Prix de vente HT repris dans l'OR (modifiable sur la ligne de l'OR).
+  salePrice     Decimal @default(0) @map("sale_price") @db.Decimal(12, 3)
+
+  /// Archive (plus propose dans les OR) plutot que supprime : l'historique reste.
+  isActive Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  garage    Garage          @relation(fields: [garageId], references: [id], onDelete: Cascade)
+  movements StockMovement[]
+  parts     Part[]
+
+  @@unique([garageId, reference])
+  @@index([garageId])
+  @@map("stock_items")
+}
+
+model StockMovement {
+  id          String            @id @default(uuid())
+  garageId    String            @map("garage_id")
+  stockItemId String            @map("stock_item_id")
+  type        StockMovementType
+  /// Variation signee du stock (+ entree / retour, - sortie, +/- correction).
+  quantity    Decimal           @db.Decimal(10, 2)
+  /// Stock apres le mouvement.
+  balance     Decimal           @db.Decimal(10, 2)
+  /// Prix d'achat unitaire HT d'une entree (livraison).
+  unitCost    Decimal?          @map("unit_cost") @db.Decimal(12, 3)
+  note        String?
+  workOrderId String?           @map("work_order_id")
+  partId      String?           @map("part_id")
+  actorId     String?           @map("actor_id")
+  createdAt   DateTime          @default(now()) @map("created_at")
+
+  garage    Garage     @relation(fields: [garageId], references: [id], onDelete: Cascade)
+  stockItem StockItem  @relation(fields: [stockItemId], references: [id], onDelete: Cascade)
+  workOrder WorkOrder? @relation(fields: [workOrderId], references: [id], onDelete: SetNull)
+  actor     User?      @relation("StockMovementActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([stockItemId, createdAt])
+  @@index([garageId, createdAt])
+  @@map("stock_movements")
+}

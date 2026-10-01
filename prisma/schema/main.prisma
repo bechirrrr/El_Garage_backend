@@ -1,0 +1,40 @@
+// ---------------------------------------------------------------------------
+// El Garage - Configuration + enums partages
+// ---------------------------------------------------------------------------
+
+// Prisma 7 : generateur sans binaire Rust. `output` est obligatoire.
+generator client {
+  provider = "prisma-client"
+  output   = "../../src/generated/prisma"
+}
+
+// L'URL de connexion vit dans prisma.config.ts, pas ici.
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// ENUMS PARTAGES
+// Un enum utilise par plusieurs modeles vit ici. Un enum propre a un seul
+// modele vit dans le fichier de ce modele.
+// ---------------------------------------------------------------------------
+
+// Role garage-scope (ADMIN, MECHANIC, FRONT_DESK) vs role plateforme (OWNER) :
+// un User avec role = OWNER a un garageId NULL (voir user.prisma). Les trois
+// premiers roles appartiennent toujours a un garage precis ; OWNER se situe
+// au-dessus du multi-tenant et ne travaille jamais "dans" un garage.
+enum Role {
+  ADMIN
+  MECHANIC
+  FRONT_DESK
+  OWNER
+}
+
+// Partage entre WorkOrder (priorite du ticket) et Task (priorite d'une
+// tache individuelle, optionnelle) : voir work-order.prisma et task.prisma.
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}

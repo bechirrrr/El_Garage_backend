@@ -1,0 +1,57 @@
+// ---------------------------------------------------------------------------
+// El Garage - Modele Garage (le tenant)
+// ---------------------------------------------------------------------------
+
+// GARAGE = la racine du multi-tenant. Toute entite metier pointe vers lui.
+// Chaque entite metier a un garageId et une relation vers ce modele.
+//
+// Section 28 : un Garage nait en PENDING_APPROVAL (cree par l'Admin lors de
+// l'inscription), et seul un OWNER peut le faire passer a ACTIVE/REJECTED,
+// puis eventuellement SUSPENDED/ACTIVE (Owner Console). Tant qu'un Garage
+// n'est pas ACTIVE, son Admin ne doit pas acceder au Dashboard (regle
+// applicative, pas une contrainte de schema).
+//
+// reviewedById/reviewedAt tracent le dernier OWNER a avoir change le statut
+// et quand -- pas un historique complet des changements (un Garage change
+// de statut rarement, contrairement a un WorkOrder), juste le dernier etat
+// connu. Nullable : un Garage tout juste cree n'a pas encore ete revu.
+
+enum GarageStatus {
+  PENDING_APPROVAL
+  ACTIVE
+  SUSPENDED
+  REJECTED
+}
+
+model Garage {
+  id      String       @id @default(uuid())
+  name    String
+  phone   String?
+  address String?
+  status  GarageStatus @default(PENDING_APPROVAL)
+
+  reviewedById String?   @map("reviewed_by_id")
+  reviewedAt   DateTime? @map("reviewed_at")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations : ajouter ici chaque nouvelle collection du garage
+  users          User[]
+  reviewedBy     User?           @relation("GarageReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  invitations    Invitation[]
+  customers      Customer[]
+  vehicles       Vehicle[]
+  workOrders     WorkOrder[]
+  diagnoses      Diagnosis[]
+  tasks          Task[]
+  parts          Part[]
+  photos         Photo[]
+  notes          Note[]
+  activityEvents ActivityEvent[]
+  invoices       Invoice[]
+  payments       Payment[]
+  reservations   Reservation[]
+
+  @@map("garages")
+}

@@ -1,0 +1,90 @@
+// ---------------------------------------------------------------------------
+// El Garage - Modeles Invoice + Payment (Finance, Section 30)
+// ---------------------------------------------------------------------------
+
+// Option B de la spec (deja tranchee) : Invoice separee du WorkOrder
+// (relation 1-1 pour le MVP), avec Payment en 1-N pour supporter les
+// paiements partiels/multiples.
+//   WorkOrder --1--1-- Invoice --1--N-- Payment
+//
+// Decimal partout pour l'argent (meme raison que sur Part : pas d'arrondi
+// flottant binaire sur des montants factures).
+//
+// customerId duplique ici comme sur WorkOrder : le client facture doit
+// rester fige dans l'historique meme si la fiche Customer change plus tard.
+//
+// totalPrice est un champ STOCKE, pas calcule (contrairement a Part) : la
+// spec (Section 30bis, points ouverts) traite explicitement le cas "prix
+// modifie apres paiement" comme un evenement a tracer -> total_price doit
+// donc exister comme une valeur figee et interrogeable, pas juste deduite
+// a la volee de labor_price + parts_total. L'invariant
+// (labor_price + parts_total = total_price) est une regle applicative, pas
+// une contrainte de base de donnees.
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  PARTIALLY_PAID
+  PAID
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  TRANSFER
+  OTHER
+}
+
+model Invoice {
+  id       String @id @default(uuid())
+  garageId String @map("garage_id")
+
+  // 1-1 avec WorkOrder pour le MVP (voir commentaire en tete de fichier).
+  workOrderId String @unique @map("work_order_id")
+  customerId  String @map("customer_id")
+
+  laborPrice Decimal       @default(0) @map("labor_price") @db.Decimal(10, 2)
+  partsTotal Decimal       @default(0) @map("parts_total") @db.Decimal(10, 2)
+  totalPrice Decimal       @map("total_price") @db.Decimal(10, 2)
+  status     InvoiceStatus @default(DRAFT)
+
+  // Nullables : une Invoice en DRAFT n'a pas encore ete emise.
+  issuedById String?   @map("issued_by_id")
+  issuedAt   DateTime? @map("issued_at")
+  dueDate    DateTime? @map("due_date")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  garage    Garage    @relation(fields: [garageId], references: [id], onDelete: Cascade)
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Restrict)
+  customer  Customer  @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  issuedBy  User?     @relation("InvoiceIssuedBy", fields: [issuedById], references: [id], onDelete: Restrict)
+  payments  Payment[]
+
+  @@index([garageId])
+  @@index([customerId])
+  @@map("invoices")
+}
+
+model Payment {
+  id        String @id @default(uuid())
+  garageId  String @map("garage_id")
+  invoiceId String @map("invoice_id")
+
+  amount       Decimal       @db.Decimal(10, 2)
+  method       PaymentMethod
+  paidAt       DateTime      @default(now()) @map("paid_at")
+  recordedById String        @map("recorded_by_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  garage     Garage  @relation(fields: [garageId], references: [id], onDelete: Cascade)
+  invoice    Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  recordedBy User    @relation("PaymentRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
+
+  @@index([garageId])
+  @@index([invoiceId])
+  @@map("payments")
+}

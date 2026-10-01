@@ -1,0 +1,50 @@
+// ---------------------------------------------------------------------------
+// El Garage - Modele Part (pieces utilisees sur un WorkOrder)
+// ---------------------------------------------------------------------------
+
+// Section 14 de la spec. Exemple :
+//   Engine Oil       5L     150 TND
+//   Oil Filter       1       35 TND
+//   Injector #3      1      480 TND
+// -> quantity + unit separes ("5" + "L") pour couvrir aussi bien les pieces
+// comptees a l'unite (unit = null) que les consommables vendus au volume.
+//
+// Decimal (pas Float) pour quantity et unitPrice : de l'argent/des quantites
+// facturables ne doivent jamais subir d'arrondi flottant binaire.
+// Pas de champ totalPrice stocke ici : (quantity * unitPrice) se calcule a
+// la volee cote code. Le total agrege de TOUTES les parts d'un WorkOrder
+// (Invoice.parts_total, Section 30bis) sera fige au moment de la facturation,
+// donc pas de raison de dupliquer ce calcul ligne par ligne en base.
+//
+// Le statut permet de detecter "reparation bloquee en attente de piece"
+// (WAITING_FOR_PARTS sur le WorkOrder correspond typiquement a au moins une
+// Part au statut ORDERED).
+
+enum PartStatus {
+  AVAILABLE
+  ORDERED
+  RECEIVED
+  USED
+}
+
+model Part {
+  id          String @id @default(uuid())
+  garageId    String @map("garage_id")
+  workOrderId String @map("work_order_id")
+
+  name      String
+  quantity  Decimal    @default(1) @db.Decimal(10, 2)
+  unit      String?
+  unitPrice Decimal    @map("unit_price") @db.Decimal(10, 2)
+  status    PartStatus @default(AVAILABLE)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  garage    Garage    @relation(fields: [garageId], references: [id], onDelete: Cascade)
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+
+  @@index([garageId])
+  @@index([workOrderId])
+  @@map("parts")
+}
