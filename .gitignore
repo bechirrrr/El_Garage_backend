@@ -1,17 +1,22 @@
-# Dependances
+# Dependencies
 node_modules/
 
 # Build
 dist/
 build/
 
-# Environnement (ne JAMAIS commiter : contient mots de passe et secrets)
+# Environment variables
+# NEVER commit secrets, passwords, API keys, etc.
 .env
 .env.local
+.env.*.local
 
 # Logs
 *.log
 npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
 
 # IDE / OS
 .vscode/
@@ -19,8 +24,12 @@ npm-debug.log*
 .DS_Store
 Thumbs.db
 
-# Prisma
+# Prisma local databases
 prisma/*.db
+prisma/*.db-journal
 
-# Client Prisma genere (recree par `npx prisma generate`)
+# Generated Prisma Client
 src/generated/
+
+# Coverage
+coverage/
