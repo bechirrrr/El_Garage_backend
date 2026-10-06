@@ -24,8 +24,10 @@ export class PartsService {
     if (!workOrder || workOrder.garageId !== garageId) {
       throw new NotFoundException('Ticket introuvable.');
     }
-    if (userRole === Role.MECHANIC && workOrder.createdById !== userId) {
-      throw new ForbiddenException('Vous ne pouvez modifier que les tickets que vous avez crees.');
+    // Un Mecanicien travaille sur un ticket s'il l'a cree OU s'il lui est assigne
+    // (flux normal : le Front Desk cree l'OR puis l'assigne).
+    if (userRole === Role.MECHANIC && workOrder.createdById !== userId && workOrder.assignedMechanicId !== userId) {
+      throw new ForbiddenException('Vous ne pouvez modifier que les tickets que vous avez crees ou qui vous sont assignes.');
     }
     return workOrder;
   }

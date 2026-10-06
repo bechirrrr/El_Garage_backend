@@ -2,6 +2,7 @@ import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/co
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
 import { Roles } from '../../common/decorators/roles.decorator.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
+import { RateLimitGuard } from '../../common/guards/rate-limit.guard.js';
 import { RolesGuard } from '../../common/guards/roles.guard.js';
 import type { CurrentUserPayload } from '../../common/types/current-user.type.js';
 import { Role } from '../../generated/prisma/client.js';
@@ -16,6 +17,9 @@ import { InvitationsService } from './invitations.service.js';
  * -- jamais d'un parametre fourni par le client. C'est plus simple ET plus
  * sur : rien a verifier, il n'y a qu'un seul garage possible.
  */
+/** Compteur partage par les deux routes publiques : 30 requetes / 15 min par IP. */
+const publicInvitationLimit = new RateLimitGuard(30, 15 * 60_000);
+
 @Controller('invitations')
 export class InvitationsController {
   constructor(private readonly invitationsService: InvitationsService) {}
@@ -46,11 +50,13 @@ export class InvitationsController {
   // --- Public : l'invite n'a pas encore de compte, donc pas de JWT ---
 
   @Get('by-token/:token')
+  @UseGuards(publicInvitationLimit)
   preview(@Param('token') token: string) {
     return this.invitationsService.preview(token);
   }
 
   @Post('by-token/:token/accept')
+  @UseGuards(publicInvitationLimit)
   accept(@Param('token') token: string, @Body() dto: AcceptInvitationDto) {
     return this.invitationsService.accept(token, dto);
   }

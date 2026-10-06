@@ -71,4 +71,14 @@ export class InvoicesController {
   ) {
     return this.invoicesService.recordPayment(user.garageId as string, user.id, workOrderId, dto);
   }
+
+  /** Remboursement d'un trop-percu (facture baissee apres paiement). `amount` positif. */
+  @Post('refunds')
+  refund(
+    @CurrentUser() user: CurrentUserPayload,
+    @Param('workOrderId') workOrderId: string,
+    @Body() dto: CreatePaymentDto,
+  ) {
+    return this.invoicesService.refund(user.garageId as string, user.id, workOrderId, dto);
+  }
 }

@@ -112,6 +112,35 @@ describe('InvoicesService.update -- flag afterPayment (Section 30bis)', () => {
     expect(events[0].category).toBe('SENSITIVE');
   });
 
+  it('facture PAID dont le prix augmente : redevient PARTIALLY_PAID (la difference reste a payer)', async () => {
+    const paidInvoice = {
+      id: 'invoice-1',
+      workOrderId: 'wo-1',
+      status: 'PAID',
+      laborPrice: new Prisma.Decimal(400),
+      partsTotal: new Prisma.Decimal(0),
+      vatRate: new Prisma.Decimal(0),
+      stampDuty: new Prisma.Decimal(0),
+      totalPrice: new Prisma.Decimal(400),
+    };
+    const payment = {
+      count: () => Promise.resolve(1),
+      aggregate: () => Promise.resolve({ _sum: { amount: new Prisma.Decimal(400) } }),
+    };
+    const invoice = {
+      findUnique: () => Promise.resolve(paidInvoice),
+      update: (args: any) => Promise.resolve({ ...paidInvoice, ...args.data }),
+    };
+    const service = new InvoicesService(makePrismaMock({ invoice, payment }));
+
+    const raised = await service.update('garage-1', 'user-1', 'wo-1', { laborPrice: 500 });
+    expect(raised.status).toBe('PARTIALLY_PAID');
+
+    // Prix baisse sous le deja-paye : reste PAID.
+    const lowered = await service.update('garage-1', 'user-1', 'wo-1', { laborPrice: 300 });
+    expect(lowered.status).toBe('PAID');
+  });
+
   it('rejette si la facture est CANCELLED', async () => {
     const prisma = makePrismaMock({
       invoice: { findUnique: () => Promise.resolve({ id: 'invoice-1', status: 'CANCELLED' }) },
@@ -245,6 +274,34 @@ describe('InvoicesService.recordPayment', () => {
 
     expect(invoiceUpdates[0].status).toBe('PAID');
     expect(events[0].metadata.invoiceStatus).toBe('PAID');
+  });
+});
+
+describe('InvoicesService.refund -- trop-percu', () => {
+  const invoice = { id: 'invoice-1', workOrderId: 'wo-1', status: 'PAID', totalPrice: new Prisma.Decimal(300) };
+  const make = (paid: number) =>
+    new InvoicesService(
+      makePrismaMock({
+        invoice: { findUnique: () => Promise.resolve(invoice) },
+        payment: {
+          aggregate: () => Promise.resolve({ _sum: { amount: new Prisma.Decimal(paid) } }),
+          create: (args: any) => Promise.resolve({ id: 'payment-2', ...args.data }),
+        },
+      }),
+    );
+
+  it('enregistre un Payment NEGATIF plafonne au trop-percu', async () => {
+    const refund = await make(400).refund('garage-1', 'user-1', 'wo-1', { amount: 100, method: 'CASH' as any });
+    expect(refund.amount.toString()).toBe('-100');
+  });
+
+  it('rejette un remboursement superieur au trop-percu, ou sans trop-percu', async () => {
+    await expect(make(400).refund('garage-1', 'user-1', 'wo-1', { amount: 150, method: 'CASH' as any })).rejects.toThrow(
+      BadRequestException,
+    );
+    await expect(make(300).refund('garage-1', 'user-1', 'wo-1', { amount: 10, method: 'CASH' as any })).rejects.toThrow(
+      BadRequestException,
+    );
   });
 });
 

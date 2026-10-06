@@ -1,4 +1,4 @@
-import { IsEmail, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsEmail, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
 /**
  * Section 4 de la spec : l'inscription cree le Garage ET son premier
@@ -28,5 +28,6 @@ export class RegisterGarageDto {
   // Le hachage bcrypt se fait dans le service, jamais dans le DTO.
   @IsString()
   @MinLength(8)
+  @MaxLength(72) // bcrypt ignore tout ce qui depasse 72 octets
   adminPassword!: string;
 }

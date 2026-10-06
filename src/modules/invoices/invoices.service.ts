@@ -153,6 +153,20 @@ export class InvoicesService {
     const paymentsCount = await this.prisma.payment.count({ where: { invoiceId: invoice.id } });
     const afterPayment = paymentsCount > 0 && !totalPrice.equals(invoice.totalPrice);
 
+    // Le statut de paiement suit le NOUVEAU total : une facture PAID dont le
+    // prix augmente redevient PARTIALLY_PAID (recordPayment accepte alors la
+    // difference), et une facture PARTIALLY_PAID dont le prix descend au niveau
+    // de ce qui est deja encaisse devient PAID. DRAFT/ISSUED ne bougent pas.
+    let status = invoice.status;
+    if (invoice.status === InvoiceStatus.PAID || invoice.status === InvoiceStatus.PARTIALLY_PAID) {
+      const paid = await this.prisma.payment.aggregate({
+        where: { invoiceId: invoice.id },
+        _sum: { amount: true },
+      });
+      const totalPaid = paid._sum.amount ?? new Prisma.Decimal(0);
+      status = totalPaid.greaterThanOrEqualTo(totalPrice) ? InvoiceStatus.PAID : InvoiceStatus.PARTIALLY_PAID;
+    }
+
     return this.prisma.$transaction(async (tx) => {
       const updated = await tx.invoice.update({
         where: { id: invoice.id },
@@ -162,6 +176,7 @@ export class InvoicesService {
           subtotal,
           vatAmount,
           totalPrice,
+          status,
           dueDate: dto.dueDate === undefined ? undefined : new Date(dto.dueDate),
         },
       });
@@ -180,6 +195,7 @@ export class InvoicesService {
           old: invoice.totalPrice.toFixed(3),
           new: totalPrice.toFixed(3),
           afterPayment,
+          ...(status !== invoice.status ? { oldStatus: invoice.status, newStatus: status } : {}),
         },
       });
 
@@ -320,6 +336,62 @@ export class InvoicesService {
           totalPaid: newTotalPaid.toFixed(3),
           invoiceStatus: newStatus,
         },
+      });
+
+      return payment;
+    });
+  }
+
+  /**
+   * Remboursement d'un trop-percu : la facture a ete baissee APRES paiement
+   * (voir update()), le client a donc paye plus que le total. Le remboursement
+   * est un Payment de montant NEGATIF : toutes les sommes existantes (deja
+   * paye, reste a payer, caisse de la periode) restent justes sans cas
+   * particulier, et le fait financier reste immuable comme un paiement.
+   *
+   * Plafonne au trop-percu : on ne rembourse jamais plus que
+   * (total paye - total facture).
+   */
+  async refund(garageId: string, actorId: string, workOrderId: string, dto: CreatePaymentDto) {
+    await this.getWorkOrder(garageId, workOrderId);
+    const invoice = await this.getInvoiceOrThrow(workOrderId);
+
+    const paid = await this.prisma.payment.aggregate({
+      where: { invoiceId: invoice.id },
+      _sum: { amount: true },
+    });
+    const totalPaid = paid._sum.amount ?? new Prisma.Decimal(0);
+    const overpaid = totalPaid.minus(invoice.totalPrice);
+    if (!overpaid.isPositive()) {
+      throw new BadRequestException("Aucun trop-perçu à rembourser sur cette facture.");
+    }
+
+    const amount = new Prisma.Decimal(dto.amount);
+    if (amount.greaterThan(overpaid)) {
+      throw new BadRequestException(`Le remboursement dépasse le trop-perçu (${overpaid.toFixed(3)} DT).`);
+    }
+    const newTotalPaid = totalPaid.minus(amount);
+
+    return this.prisma.$transaction(async (tx) => {
+      const payment = await tx.payment.create({
+        data: {
+          garageId,
+          invoiceId: invoice.id,
+          amount: amount.negated(),
+          method: dto.method,
+          recordedById: actorId,
+          paidAt: dto.paidAt ? new Date(dto.paidAt) : undefined,
+        },
+      });
+
+      await this.recordEvent(tx, {
+        garageId,
+        workOrderId,
+        actorId,
+        type: 'PAYMENT_REFUNDED',
+        category: ActivityCategory.SENSITIVE,
+        message: `Remboursement enregistre : ${amount.toFixed(3)} (${dto.method})`,
+        metadata: { amount: amount.toFixed(3), method: dto.method, totalPaid: newTotalPaid.toFixed(3) },
       });
 
       return payment;

@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { ActivityCategory, ReservationStatus, Role } from '../../generated/prisma/client.js';
 import { logActivity } from '../../common/activity-log.js';
+import { assertMileageNotDecreasing } from '../../common/mileage.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { nextWorkOrderNumber } from '../../common/work-order-number.js';
 import type { ConvertReservationDto } from './dto/convert-reservation.dto.js';
@@ -267,6 +268,12 @@ export class ReservationsService {
     if (!vehicle || vehicle.garageId !== garageId) {
       throw new NotFoundException('Vehicule introuvable dans ce garage.');
     }
+    await assertMileageNotDecreasing(this.prisma, {
+      garageId,
+      vehicleId: vehicle.id,
+      mileage: dto.mileage,
+      vehicleMileage: vehicle.mileage,
+    });
 
     return this.prisma.$transaction(async (tx) => {
       const number = await nextWorkOrderNumber(tx, garageId);
