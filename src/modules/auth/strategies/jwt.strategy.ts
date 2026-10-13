@@ -1,6 +1,8 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
+import type { Request } from 'express';
 import { ExtractJwt, Strategy } from 'passport-jwt';
+import { passwordFingerprint } from '../../../common/password-fingerprint.js';
 import { GarageStatus } from '../../../generated/prisma/client.js';
 import { PrismaService } from '../../../prisma/prisma.service.js';
 import type { CurrentUserPayload } from '../../../common/types/current-user.type.js';
@@ -10,7 +12,12 @@ interface JwtPayload {
   sub: string;
   garageId: string | null;
   role: CurrentUserPayload['role'];
+  /** Empreinte du mot de passe au moment du login (voir common/password-fingerprint.ts). */
+  pv?: string;
 }
+
+/** Seules routes accessibles tant que le mot de passe provisoire n'a pas ete change. */
+const ALLOWED_WHILE_PASSWORD_CHANGE_REQUIRED = ['/auth/change-password', '/auth/me'];
 
 /**
  * Verifie la signature + l'expiration du Bearer token, puis appelle
@@ -38,38 +45,52 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
       secretOrKey: process.env.JWT_SECRET as string,
+      // Donne acces a la requete dans validate() (pour connaitre la route appelee).
+      passReqToCallback: true,
     });
   }
 
-  async validate(payload: JwtPayload): Promise<CurrentUserPayload> {
-    // Chemin normal (99 % des requetes) : UNE seule requete SQL. Les conditions
-    // "compte actif" et "garage ACTIVE" (sauf OWNER, garageId null) sont dans
-    // le WHERE -- Postgres les verifie via une sous-requete sur garages -- et on
-    // ne lit que les 4 colonnes utiles. Avant : 2 requetes (user + garage) et
-    // ~36 colonnes (dont le hash du mot de passe) a chaque appel authentifie.
+  async validate(req: Pick<Request, 'originalUrl'>, payload: JwtPayload): Promise<CurrentUserPayload> {
+    // Chemin normal : UNE seule requete SQL. "Compte actif" et "garage ACTIVE"
+    // (sauf OWNER, garageId null : il n'appartient a aucun garage) sont dans le
+    // WHERE et on ne lit que les colonnes utiles. Avant : 2 requetes
+    // (user + garage) et ~36 colonnes a chaque appel authentifie.
     const user = await this.prisma.user.findFirst({
       where: {
         id: payload.sub,
         isActive: true,
         OR: [{ garageId: null }, { garage: { status: GarageStatus.ACTIVE } }],
       },
-      select: { id: true, garageId: true, role: true, mustChangePassword: true },
+      select: { id: true, garageId: true, role: true, mustChangePassword: true, passwordHash: true },
     });
-    if (user) {
-      return { id: user.id, garageId: user.garageId, role: user.role, mustChangePassword: user.mustChangePassword };
+
+    if (!user) {
+      // Chemin d'echec (rare) : une 2e lecture, seulement pour renvoyer le bon message.
+      const existing = await this.prisma.user.findUnique({
+        where: { id: payload.sub },
+        select: { isActive: true },
+      });
+      if (!existing || !existing.isActive) {
+        throw new UnauthorizedException('Compte introuvable ou desactive.');
+      }
+      throw new UnauthorizedException("L'acces a ce garage n'est plus autorise.");
     }
 
-    // Chemin d'echec (rare) : une 2e lecture, seulement pour renvoyer le bon message.
-    const existing = await this.prisma.user.findUnique({
-      where: { id: payload.sub },
-      select: { isActive: true },
-    });
-    if (!existing || !existing.isActive) {
-      throw new UnauthorizedException('Compte introuvable ou desactive.');
+    // Token emis avant le dernier changement de mot de passe -> session revoquee.
+    if (!user.passwordHash || payload.pv !== passwordFingerprint(user.passwordHash)) {
+      throw new UnauthorizedException('Session expiree. Reconnectez-vous.');
     }
-    // OWNER (garageId null) n'est jamais concerne par le statut d'un Garage --
-    // seuls ADMIN/MECHANIC/FRONT_DESK, scopes a un Garage, le sont.
-    throw new UnauthorizedException("L'acces a ce garage n'est plus autorise.");
+
+    // Mot de passe provisoire (compte cree par l'Admin) : verifie ICI, cote
+    // serveur -- le frontend redirige deja vers /change-password, mais un
+    // appel direct a l'API contournerait cette redirection.
+    if (user.mustChangePassword) {
+      const path = (req.originalUrl ?? '').split('?')[0];
+      if (!ALLOWED_WHILE_PASSWORD_CHANGE_REQUIRED.some((allowed) => path.endsWith(allowed))) {
+        throw new ForbiddenException('Vous devez changer votre mot de passe provisoire avant de continuer.');
+      }
+    }
+
+    return { id: user.id, garageId: user.garageId, role: user.role };
   }
-
 }

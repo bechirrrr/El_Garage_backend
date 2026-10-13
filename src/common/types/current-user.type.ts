@@ -12,6 +12,4 @@ export interface CurrentUserPayload {
   id: string;
   garageId: string | null;
   role: Role;
-  /** true tant qu'un compte cree par l'Admin n'a pas remplace son mot de passe provisoire (voir JwtAuthGuard). */
-  mustChangePassword?: boolean;
 }

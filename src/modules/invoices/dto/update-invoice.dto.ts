@@ -1,23 +1,16 @@
 import { IsDateString, IsNumber, IsOptional, Min } from 'class-validator';
 
 /**
- * Contrairement a CreateInvoiceDto, `partsTotal` redevient modifiable ici :
- * une correction (remise, piece ajoutee apres coup...) doit rester
- * possible meme apres la creation -- y compris apres un paiement (Section
- * 30bis : "prix modifie apres paiement" doit etre visible et trace, pas
- * bloque pour le MVP). Voir InvoicesService.update pour le flag
- * `afterPayment` journalise dans ce cas.
+ * `partsTotal` n'est PAS modifiable a la main, comme a la creation : pour
+ * facturer une piece de plus (y compris apres un paiement), on ajoute la
+ * PIECE a l'OR -- InvoicesService.update recalcule alors Pieces HT en
+ * sommant les Parts. Un montant saisi sans piece derriere n'est plus accepte.
  */
 export class UpdateInvoiceDto {
   @IsOptional()
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
   laborPrice?: number;
-
-  @IsOptional()
-  @IsNumber({ maxDecimalPlaces: 3 })
-  @Min(0)
-  partsTotal?: number;
 
   @IsOptional()
   @IsDateString()

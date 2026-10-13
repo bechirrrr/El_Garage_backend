@@ -1,5 +1,6 @@
 import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Role } from '../../generated/prisma/client.js';
+import { assertMileageNotDecreasing } from '../../common/mileage.js';
 import { logActivity } from '../../common/activity-log.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import type { CreateVehicleDto } from './dto/create-vehicle.dto.js';
@@ -138,6 +139,11 @@ export class VehiclesService {
       if (existingVin && existingVin.id !== id) {
         throw new ConflictException('Ce VIN est deja associe a un autre vehicule.');
       }
+    }
+
+    // La fiche vehicule ne peut pas afficher moins que ce qu'un ticket a deja releve.
+    if (dto.mileage !== undefined && dto.mileage !== vehicle.mileage) {
+      await assertMileageNotDecreasing(this.prisma, { garageId, vehicleId: id, mileage: dto.mileage });
     }
 
     const updated = await this.prisma.vehicle.update({ where: { id }, data: dto });

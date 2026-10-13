@@ -33,6 +33,9 @@ function db(initialQty = 17) {
     },
     stockMovement: { create: ({ data }: any) => (movements.push(data), Promise.resolve(data)) },
     workOrder: { findUnique: () => Promise.resolve({ id: 'wo-1', garageId: 'garage-1', createdById: 'u1' }) },
+    // Pas de facture sur cet OR : PartsService la consulte (pieces bloquees apres encaissement,
+    // resynchronisation du total Pieces) -- sans cette table le mock plantait.
+    invoice: { findUnique: () => Promise.resolve(null) },
     part: {
       create: ({ data }: any) => {
         const p = { id: `part-${parts.length + 1}`, ...data, quantity: new Prisma.Decimal(data.quantity ?? 1) };

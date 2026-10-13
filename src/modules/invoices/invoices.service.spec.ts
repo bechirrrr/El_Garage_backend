@@ -67,6 +67,24 @@ describe('InvoicesService.create', () => {
     await expect(service.create('garage-1', 'admin-1', 'wo-1', {})).rejects.toThrow(ConflictException);
   });
 
+  it('recree une facture ANNULEE : meme ligne remise en DRAFT avec les montants du jour', async () => {
+    const prisma = makePrismaMock({
+      part: { findMany: () => Promise.resolve([{ quantity: new Prisma.Decimal(2), unitPrice: new Prisma.Decimal(50) }]) },
+      invoice: {
+        findUnique: () => Promise.resolve({ id: 'invoice-1', status: 'CANCELLED', issuedAt: new Date() }),
+        create: () => Promise.reject(new Error('ne doit pas creer une 2e ligne')),
+        update: (args: any) => Promise.resolve({ id: args.where.id, ...args.data }),
+      },
+    });
+
+    const result = await new InvoicesService(prisma).create('garage-1', 'admin-1', 'wo-1', { laborPrice: 80 });
+
+    expect(result.id).toBe('invoice-1');
+    expect(result.status).toBe('DRAFT');
+    expect(result.issuedAt).toBeNull();
+    expect(result.totalPrice.toFixed(2)).toBe('180.00');
+  });
+
   it('rejette si le ticket est introuvable / dans un autre garage', async () => {
     const prisma = makePrismaMock({
       workOrder: { findUnique: () => Promise.resolve(null) },
@@ -81,6 +99,9 @@ describe('InvoicesService.update -- flag afterPayment (Section 30bis)', () => {
   it('journalise afterPayment=true si le prix change alors que des paiements existent deja', async () => {
     const events: any[] = [];
     const prisma = makePrismaMock({
+      part: {
+        findMany: () => Promise.resolve([{ quantity: new Prisma.Decimal(1), unitPrice: new Prisma.Decimal(630) }]),
+      },
       invoice: {
         findUnique: () =>
           Promise.resolve({
@@ -114,6 +135,74 @@ describe('InvoicesService.update -- flag afterPayment (Section 30bis)', () => {
     expect(events[0].category).toBe('SENSITIVE');
   });
 
+  it('facture PAID dont le prix augmente : redevient PARTIALLY_PAID (la difference reste a payer)', async () => {
+    const paidInvoice = {
+      id: 'invoice-1',
+      workOrderId: 'wo-1',
+      status: 'PAID',
+      laborPrice: new Prisma.Decimal(400),
+      partsTotal: new Prisma.Decimal(0),
+      vatRate: new Prisma.Decimal(0),
+      stampDuty: new Prisma.Decimal(0),
+      totalPrice: new Prisma.Decimal(400),
+    };
+    const payment = {
+      count: () => Promise.resolve(1),
+      aggregate: () => Promise.resolve({ _sum: { amount: new Prisma.Decimal(400) } }),
+    };
+    const invoice = {
+      findUnique: () => Promise.resolve(paidInvoice),
+      update: (args: any) => Promise.resolve({ ...paidInvoice, ...args.data }),
+    };
+    const service = new InvoicesService(makePrismaMock({ invoice, payment }));
+
+    const raised = await service.update('garage-1', 'user-1', 'wo-1', { laborPrice: 500 });
+    expect(raised.status).toBe('PARTIALLY_PAID');
+
+    // Prix baisse sous le deja-paye : reste PAID.
+    const lowered = await service.update('garage-1', 'user-1', 'wo-1', { laborPrice: 300 });
+    expect(lowered.status).toBe('PAID');
+  });
+
+  it('piece ajoutee apres paiement : Pieces HT est recalcule depuis les Parts et le reste a payer reapparait', async () => {
+    const paidInvoice = {
+      id: 'invoice-1',
+      workOrderId: 'wo-1',
+      status: 'PAID',
+      laborPrice: new Prisma.Decimal(200),
+      partsTotal: new Prisma.Decimal(100),
+      vatRate: new Prisma.Decimal(0),
+      stampDuty: new Prisma.Decimal(0),
+      totalPrice: new Prisma.Decimal(300),
+    };
+    const service = new InvoicesService(
+      makePrismaMock({
+        // La piece a 100 deja facturee + une piece a 45 ajoutee apres le paiement.
+        part: {
+          findMany: () =>
+            Promise.resolve([
+              { quantity: new Prisma.Decimal(1), unitPrice: new Prisma.Decimal(100) },
+              { quantity: new Prisma.Decimal(3), unitPrice: new Prisma.Decimal(15) },
+            ]),
+        },
+        invoice: {
+          findUnique: () => Promise.resolve(paidInvoice),
+          update: (args: any) => Promise.resolve({ ...paidInvoice, ...args.data }),
+        },
+        payment: {
+          count: () => Promise.resolve(1),
+          aggregate: () => Promise.resolve({ _sum: { amount: new Prisma.Decimal(300) } }),
+        },
+      }),
+    );
+
+    const updated = await service.update('garage-1', 'user-1', 'wo-1', {});
+
+    expect(updated.partsTotal.toFixed(3)).toBe('145.000');
+    expect(updated.totalPrice.toFixed(3)).toBe('345.000');
+    expect(updated.status).toBe('PARTIALLY_PAID');
+  });
+
   it('rejette si la facture est CANCELLED', async () => {
     const prisma = makePrismaMock({
       invoice: { findUnique: () => Promise.resolve({ id: 'invoice-1', status: 'CANCELLED' }) },
@@ -129,7 +218,7 @@ describe('InvoicesService.update -- flag afterPayment (Section 30bis)', () => {
 describe('InvoicesService.issue', () => {
   it('rejette si la facture n\'est pas en DRAFT', async () => {
     const prisma = makePrismaMock({
-      invoice: { findUnique: () => Promise.resolve({ id: 'invoice-1', status: 'ISSUED' }) },
+      invoice: { findUnique: () => Promise.resolve({ id: 'invoice-1', status: 'ISSUED', partsTotal: new Prisma.Decimal(0) }) },
     });
     const service = new InvoicesService(prisma);
 
@@ -140,7 +229,7 @@ describe('InvoicesService.issue', () => {
     const prisma = makePrismaMock({
       invoice: {
         findUnique: () =>
-          Promise.resolve({ id: 'invoice-1', status: 'DRAFT', totalPrice: new Prisma.Decimal(830) }),
+          Promise.resolve({ id: 'invoice-1', status: 'DRAFT', partsTotal: new Prisma.Decimal(0), totalPrice: new Prisma.Decimal(830) }),
         update: (args: any) => Promise.resolve({ id: args.where.id, ...args.data }),
       },
     });
@@ -250,6 +339,34 @@ describe('InvoicesService.recordPayment', () => {
   });
 });
 
+describe('InvoicesService.refund -- trop-percu', () => {
+  const invoice = { id: 'invoice-1', workOrderId: 'wo-1', status: 'PAID', totalPrice: new Prisma.Decimal(300) };
+  const make = (paid: number) =>
+    new InvoicesService(
+      makePrismaMock({
+        invoice: { findUnique: () => Promise.resolve(invoice) },
+        payment: {
+          aggregate: () => Promise.resolve({ _sum: { amount: new Prisma.Decimal(paid) } }),
+          create: (args: any) => Promise.resolve({ id: 'payment-2', ...args.data }),
+        },
+      }),
+    );
+
+  it('enregistre un Payment NEGATIF plafonne au trop-percu', async () => {
+    const refund = await make(400).refund('garage-1', 'user-1', 'wo-1', { amount: 100, method: 'CASH' as any });
+    expect(refund.amount.toString()).toBe('-100');
+  });
+
+  it('rejette un remboursement superieur au trop-percu, ou sans trop-percu', async () => {
+    await expect(make(400).refund('garage-1', 'user-1', 'wo-1', { amount: 150, method: 'CASH' as any })).rejects.toThrow(
+      BadRequestException,
+    );
+    await expect(make(300).refund('garage-1', 'user-1', 'wo-1', { amount: 10, method: 'CASH' as any })).rejects.toThrow(
+      BadRequestException,
+    );
+  });
+});
+
 describe('InvoicesService -- TVA et timbre fiscal', () => {
   it('create : HT + TVA 19 % + timbre 1,000 = TTC, copies sur la facture', async () => {
     let data: any = null;
@@ -310,45 +427,54 @@ describe('InvoicesService -- coherence statut / montant (verrou + recalcul)', ()
       ...overrides,
     };
   }
+  // Pieces HT est recalcule depuis les Parts de l'OR : une piece a 630.
+  const parts630 = { findMany: () => Promise.resolve([{ quantity: new Prisma.Decimal(1), unitPrice: new Prisma.Decimal(630) }]) };
+  const capture = (updates: any[]) => (args: any) => (updates.push(args.data), Promise.resolve({ id: args.where.id, ...args.data }));
 
   it('update : une facture PAID dont le prix augmente redevient PARTIALLY_PAID', async () => {
     const updates: any[] = [];
     const prisma = makePrismaMock({
-      invoice: {
-        findUnique: () => Promise.resolve(paidInvoice()),
-        update: (args: any) => (updates.push(args.data), Promise.resolve({ id: args.where.id, ...args.data })),
+      part: parts630,
+      invoice: { findUnique: () => Promise.resolve(paidInvoice()), update: capture(updates) },
+      payment: {
+        count: () => Promise.resolve(1),
+        aggregate: () => Promise.resolve({ _sum: { amount: new Prisma.Decimal(830) } }),
       },
-      payment: { aggregate: () => Promise.resolve({ _sum: { amount: new Prisma.Decimal(830) } }) },
     });
     const service = new InvoicesService(prisma);
 
-    await service.update('garage-1', 'admin-1', 'wo-1', { laborPrice: 300 });
+    await service.update('garage-1', 'admin-1', 'wo-1', { laborPrice: 300 }); // 300 + 630 = 930
 
     expect(updates[0].status).toBe('PARTIALLY_PAID');
     expect(updates[0].totalPrice.toFixed(3)).toBe('930.000');
   });
 
-  it('update : rejette un total inferieur au montant deja encaisse', async () => {
+  it("update : un total inferieur a l'encaisse reste permis (trop-percu a rembourser) et la facture reste PAID", async () => {
+    const updates: any[] = [];
     const prisma = makePrismaMock({
-      invoice: { findUnique: () => Promise.resolve(paidInvoice({ status: 'PARTIALLY_PAID' })) },
-      payment: { aggregate: () => Promise.resolve({ _sum: { amount: new Prisma.Decimal(500) } }) },
+      part: { findMany: () => Promise.resolve([{ quantity: new Prisma.Decimal(1), unitPrice: new Prisma.Decimal(300) }]) },
+      invoice: { findUnique: () => Promise.resolve(paidInvoice({ status: 'PARTIALLY_PAID' })), update: capture(updates) },
+      payment: {
+        count: () => Promise.resolve(1),
+        aggregate: () => Promise.resolve({ _sum: { amount: new Prisma.Decimal(500) } }),
+      },
     });
     const service = new InvoicesService(prisma);
 
-    // 100 + 300 = 400 < 500 deja payes
-    await expect(
-      service.update('garage-1', 'admin-1', 'wo-1', { laborPrice: 100, partsTotal: 300 }),
-    ).rejects.toThrow(BadRequestException);
+    await service.update('garage-1', 'admin-1', 'wo-1', { laborPrice: 100 }); // 100 + 300 = 400 < 500 payes
+
+    expect(updates[0].status).toBe('PAID');
   });
 
   it('update : une facture PARTIALLY_PAID dont le total baisse au montant paye passe PAID', async () => {
     const updates: any[] = [];
     const prisma = makePrismaMock({
-      invoice: {
-        findUnique: () => Promise.resolve(paidInvoice({ status: 'PARTIALLY_PAID' })),
-        update: (args: any) => (updates.push(args.data), Promise.resolve({ id: args.where.id, ...args.data })),
+      part: parts630,
+      invoice: { findUnique: () => Promise.resolve(paidInvoice({ status: 'PARTIALLY_PAID' })), update: capture(updates) },
+      payment: {
+        count: () => Promise.resolve(1),
+        aggregate: () => Promise.resolve({ _sum: { amount: new Prisma.Decimal(730) } }),
       },
-      payment: { aggregate: () => Promise.resolve({ _sum: { amount: new Prisma.Decimal(730) } }) },
     });
     const service = new InvoicesService(prisma);
 
@@ -360,10 +486,8 @@ describe('InvoicesService -- coherence statut / montant (verrou + recalcul)', ()
   it('update : sans paiement, le statut reste inchange (ISSUED)', async () => {
     const updates: any[] = [];
     const prisma = makePrismaMock({
-      invoice: {
-        findUnique: () => Promise.resolve(paidInvoice({ status: 'ISSUED' })),
-        update: (args: any) => (updates.push(args.data), Promise.resolve({ id: args.where.id, ...args.data })),
-      },
+      part: parts630,
+      invoice: { findUnique: () => Promise.resolve(paidInvoice({ status: 'ISSUED' })), update: capture(updates) },
     });
     const service = new InvoicesService(prisma);
 
@@ -372,32 +496,42 @@ describe('InvoicesService -- coherence statut / montant (verrou + recalcul)', ()
     expect(updates[0].status).toBe('ISSUED');
   });
 
-  it('verrouille la ligne de la facture DANS la transaction avant de lire statut et solde', async () => {
-    const calls: string[] = [];
+  function orderedMock(calls: string[], invoice: any, paidSum: Prisma.Decimal | null) {
     const base: any = makePrismaMock({
       $queryRaw: () => (calls.push('lock'), Promise.resolve([])),
       invoice: {
-        findUnique: () => (calls.push('read'), Promise.resolve(paidInvoice({ status: 'ISSUED' }))),
+        findUnique: () => (calls.push('read'), Promise.resolve(invoice)),
         update: (args: any) => Promise.resolve({ id: args.where.id, ...args.data }),
       },
       payment: {
-        aggregate: () => (calls.push('sum'), Promise.resolve({ _sum: { amount: null } })),
+        aggregate: () => (calls.push('sum'), Promise.resolve({ _sum: { amount: paidSum } })),
         create: (args: any) => Promise.resolve({ id: 'p', ...args.data }),
       },
     });
-    let inTransaction = false;
     const realTx = base.$transaction;
-    base.$transaction = async (fn: any) => {
-      inTransaction = true;
-      calls.push('tx');
-      return realTx(fn);
-    };
-    const service = new InvoicesService(base);
+    base.$transaction = (fn: any) => (calls.push('tx'), realTx(fn));
+    return base;
+  }
+
+  it('recordPayment : verrouille la facture DANS la transaction avant de lire statut et solde', async () => {
+    const calls: string[] = [];
+    const service = new InvoicesService(orderedMock(calls, paidInvoice({ status: 'ISSUED' }), null));
 
     await service.recordPayment('garage-1', 'admin-1', 'wo-1', { amount: 100, method: 'CASH' as any });
 
-    expect(inTransaction).toBe(true);
     expect(calls).toEqual(['tx', 'lock', 'read', 'sum']);
+  });
+
+  it('refund : verrouille avant de calculer le trop-percu (pas de double remboursement)', async () => {
+    const calls: string[] = [];
+    const service = new InvoicesService(
+      orderedMock(calls, paidInvoice({ totalPrice: new Prisma.Decimal(400) }), new Prisma.Decimal(500)),
+    );
+
+    const refund = await service.refund('garage-1', 'admin-1', 'wo-1', { amount: 100, method: 'CASH' as any });
+
+    expect(calls).toEqual(['tx', 'lock', 'read', 'sum']);
+    expect(refund.amount.toFixed(3)).toBe('-100.000');
   });
 
   it('cancel : refuse si un paiement est passe entre-temps (statut relu sous verrou)', async () => {

@@ -1,4 +1,4 @@
-import { IsIn, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsIn, IsOptional, IsString, IsUrl } from 'class-validator';
 import { PhotoStage } from '../../../generated/prisma/client.js';
 
 /**
@@ -9,8 +9,9 @@ import { PhotoStage } from '../../../generated/prisma/client.js';
  * binaire, juste sa reference.
  */
 export class CreatePhotoDto {
-  @IsString()
-  @MinLength(1)
+  // http(s) uniquement : bloque javascript:, data:, etc. (require_tld: false
+  // pour accepter http://localhost en dev).
+  @IsUrl({ protocols: ['http', 'https'], require_protocol: true, require_tld: false })
   url!: string;
 
   @IsOptional()

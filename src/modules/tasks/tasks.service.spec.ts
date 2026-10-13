@@ -89,3 +89,69 @@ describe('TasksService.update / remove', () => {
     expect(result.status).toBe('DONE');
   });
 });
+
+describe('TasksService -- Mecanicien assigne', () => {
+  it("autorise le MECHANIC assigne a l'OR (cree par quelqu'un d'autre) a ajouter une tache", async () => {
+    const prisma = makePrismaMock({
+      workOrder: {
+        findUnique: () =>
+          Promise.resolve({
+            id: 'wo-1',
+            garageId: 'garage-1',
+            createdById: 'front-desk-1',
+            assignedMechanicId: 'mechanic-1',
+          }),
+      },
+    });
+    const service = new TasksService(prisma);
+
+    const result = await service.create('garage-1', 'mechanic-1', 'MECHANIC' as any, 'wo-1', { label: 'Vidange' });
+
+    expect(result.label).toBe('Vidange');
+  });
+
+  it("autorise le MECHANIC a modifier une tache qui lui est assignee sur l'OR d'un collegue", async () => {
+    const prisma = makePrismaMock({
+      workOrder: {
+        findUnique: () =>
+          Promise.resolve({
+            id: 'wo-1',
+            garageId: 'garage-1',
+            createdById: 'front-desk-1',
+            assignedMechanicId: 'other-mechanic',
+          }),
+      },
+      task: {
+        findUnique: () => Promise.resolve({ id: 'task-1', workOrderId: 'wo-1', assignedMechanicId: 'mechanic-1' }),
+        update: (args: any) => Promise.resolve({ id: args.where.id, ...args.data }),
+      },
+    });
+    const service = new TasksService(prisma);
+
+    const result = await service.update('garage-1', 'mechanic-1', 'MECHANIC' as any, 'wo-1', 'task-1', {
+      status: 'DONE' as any,
+    });
+
+    expect(result.status).toBe('DONE');
+  });
+
+  it("rejette le MECHANIC ni createur, ni assigne a l'OR, ni assigne a la tache", async () => {
+    const prisma = makePrismaMock({
+      workOrder: {
+        findUnique: () =>
+          Promise.resolve({
+            id: 'wo-1',
+            garageId: 'garage-1',
+            createdById: 'front-desk-1',
+            assignedMechanicId: 'other-mechanic',
+          }),
+      },
+      task: { findUnique: () => Promise.resolve({ id: 'task-1', workOrderId: 'wo-1', assignedMechanicId: null }) },
+    });
+    const service = new TasksService(prisma);
+
+    await expect(
+      service.update('garage-1', 'mechanic-1', 'MECHANIC' as any, 'wo-1', 'task-1', { status: 'DONE' as any }),
+    ).rejects.toThrow(ForbiddenException);
+  });
+});

@@ -17,6 +17,7 @@ function makePrismaMock(overrides: Record<string, any> = {}) {
     workOrder: {
       findUnique: () => Promise.resolve(null),
       findMany: () => Promise.resolve([]),
+      aggregate: () => Promise.resolve({ _max: { mileage: null } }),
       create: (args: any) => Promise.resolve({ id: 'wo-1', status: 'RECEIVED', ...args.data }),
       update: (args: any) => Promise.resolve({ id: args.where.id, ...args.data }),
     },
@@ -35,6 +36,17 @@ function makePrismaMock(overrides: Record<string, any> = {}) {
 const baseDto = { vehicleId: 'vehicle-1', problemReported: 'Vibration moteur' };
 
 describe('WorkOrdersService.create', () => {
+  it('rejette un kilometrage inferieur au dernier kilometrage connu du vehicule', async () => {
+    const prisma = makePrismaMock();
+    prisma.workOrder.aggregate = () => Promise.resolve({ _max: { mileage: 120000 } });
+    const service = new WorkOrdersService(prisma);
+
+    await expect(service.create('garage-1', 'user-1', { ...baseDto, mileage: 119999 })).rejects.toThrow(
+      BadRequestException,
+    );
+    await expect(service.create('garage-1', 'user-1', { ...baseDto, mileage: 120000 })).resolves.toBeDefined();
+  });
+
   it("rejette si le vehicule n'existe pas ou appartient a un autre garage", async () => {
     const prisma = makePrismaMock({
       vehicle: { findUnique: () => Promise.resolve({ id: 'vehicle-1', garageId: 'garage-2' }) },
@@ -60,7 +72,7 @@ describe('WorkOrdersService.create', () => {
     const result = await service.create('garage-1', 'user-1', baseDto);
 
     expect(result.scheduledAt).toBeInstanceOf(Date);
-    expect(result.scheduledAt.getTime()).toBeGreaterThanOrEqual(before);
+    expect(result.scheduledAt!.getTime()).toBeGreaterThanOrEqual(before);
   });
 
   it('creneau fourni : scheduledAt/estimatedMinutes repris tels quels', async () => {
@@ -72,7 +84,7 @@ describe('WorkOrdersService.create', () => {
       estimatedMinutes: 90,
     });
 
-    expect(result.scheduledAt.toISOString()).toBe('2026-10-01T08:30:00.000Z');
+    expect(result.scheduledAt!.toISOString()).toBe('2026-10-01T08:30:00.000Z');
     expect(result.estimatedMinutes).toBe(90);
   });
 });
@@ -92,6 +104,7 @@ describe('WorkOrdersService.update -- replanification depuis le calendrier', () 
     const prisma = makePrismaMock({
       workOrder: {
         findUnique: () => Promise.resolve(existing),
+        aggregate: () => Promise.resolve({ _max: { mileage: null } }),
         update: (args: any) => Promise.resolve({ ...existing, ...args.data }),
       },
       activityEvent: {

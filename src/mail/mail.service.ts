@@ -17,6 +17,16 @@ import { createTransport, type Transporter } from 'nodemailer';
  *    l'email n'est pas parti -- le token fonctionne quand meme, l'Admin
  *    peut toujours copier/coller le lien manuellement.
  */
+/** Neutralise les caracteres speciaux HTML d'un texte saisi par un utilisateur. */
+export function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 @Injectable()
 export class MailService {
   private readonly logger = new Logger(MailService.name);
@@ -46,9 +56,10 @@ export class MailService {
 
   async sendMail(options: { to: string; subject: string; html: string }): Promise<void> {
     if (!this.transporter) {
-      this.logger.log(
-        `[EMAIL SIMULE] A: ${options.to} | Sujet: ${options.subject}\n${options.html}`,
-      );
+      // Le corps contient le lien d'invitation (un secret) : affiche en dev
+      // pour pouvoir tester sans SMTP, jamais ecrit dans les logs de production.
+      const body = process.env.NODE_ENV === 'production' ? '[corps masque en production]' : options.html;
+      this.logger.log(`[EMAIL SIMULE] A: ${options.to} | Sujet: ${options.subject}\n${body}`);
       return;
     }
 
@@ -66,15 +77,19 @@ export class MailService {
     garageName: string;
     token: string;
   }): Promise<void> {
-    const frontendUrl = process.env.FRONTEND_URL ?? 'http://localhost:4200';
+    // FRONTEND_URL peut lister plusieurs origines (CORS) : le lien utilise la premiere.
+    const frontendUrl = (process.env.FRONTEND_URL ?? 'http://localhost:4200').split(',')[0].trim();
+    // name / garageName sont saisis par des utilisateurs : echappes avant d'entrer dans le HTML.
+    const name = escapeHtml(params.name);
+    const garageName = escapeHtml(params.garageName);
     const acceptUrl = `${frontendUrl}/invitations/${params.token}`;
 
     return this.sendMail({
       to: params.to,
       subject: `Invitation a rejoindre ${params.garageName} sur El Garage`,
       html: `
-        <p>Bonjour ${params.name},</p>
-        <p>Vous avez ete invite a rejoindre <strong>${params.garageName}</strong> sur El Garage.</p>
+        <p>Bonjour ${name},</p>
+        <p>Vous avez ete invite a rejoindre <strong>${garageName}</strong> sur El Garage.</p>
         <p><a href="${acceptUrl}">Cliquez ici pour creer votre compte</a></p>
         <p>Ce lien expire dans 7 jours.</p>
       `,

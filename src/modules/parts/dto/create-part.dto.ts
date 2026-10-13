@@ -1,4 +1,4 @@
-import { IsNumber, IsOptional, IsString, IsUUID, Min, MinLength, ValidateIf } from 'class-validator';
+import { IsBoolean, IsNumber, IsOptional, IsString, IsUUID, Min, MinLength, ValidateIf } from 'class-validator';
 
 /**
  * Section 14 : une Part nait toujours AVAILABLE (comme une Task nait TODO)
@@ -39,4 +39,13 @@ export class CreatePartDto {
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
   unitPrice?: number;
+
+  /**
+   * Ajout fait depuis "Modifier" la facture (ADMIN/FRONT_DESK). C'est le seul
+   * chemin autorise une fois la facture encaissee : la piece et le montant
+   * facture bougent ensemble (voir PartsService.assertInvoiceAllowsNewPart).
+   */
+  @IsOptional()
+  @IsBoolean()
+  invoiceEdit?: boolean;
 }

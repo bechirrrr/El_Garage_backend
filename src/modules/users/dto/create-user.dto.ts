@@ -1,4 +1,4 @@
-import { IsEmail, IsIn, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsEmail, IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 import { Role } from '../../../generated/prisma/client.js';
 
 export const MEMBER_ROLES = [Role.MECHANIC, Role.FRONT_DESK] as const;
@@ -31,5 +31,6 @@ export class CreateUserDto {
 
   @IsString()
   @MinLength(8)
+  @MaxLength(72) // bcrypt ignore tout ce qui depasse 72 octets
   password!: string;
 }

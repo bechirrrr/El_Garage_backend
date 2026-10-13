@@ -1,6 +1,8 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { ActivityCategory, Role } from '../../generated/prisma/client.js';
+import { ActivityCategory, Role, WorkOrderStatus } from '../../generated/prisma/client.js';
+import { autoIssueInvoiceOnCompletion } from '../../common/invoice-auto-issue.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { assertMileageNotDecreasing } from '../../common/mileage.js';
 import { nextWorkOrderNumber } from '../../common/work-order-number.js';
 import type { AssignWorkOrderDto } from './dto/assign-work-order.dto.js';
 import type { CreateWorkOrderDto } from './dto/create-work-order.dto.js';
@@ -36,6 +38,12 @@ export class WorkOrdersService {
     if (!vehicle || vehicle.garageId !== garageId) {
       throw new NotFoundException('Vehicule introuvable dans ce garage.');
     }
+    await assertMileageNotDecreasing(this.prisma, {
+      garageId,
+      vehicleId: vehicle.id,
+      mileage: dto.mileage,
+      vehicleMileage: vehicle.mileage,
+    });
 
     return this.prisma.$transaction(async (tx) => {
       const number = await nextWorkOrderNumber(tx, garageId);
@@ -210,12 +218,17 @@ export class WorkOrdersService {
 
   /**
    * Regle utilisee par update() (Section 20) : Admin et Front Desk peuvent
-   * tout modifier, un Mecanicien seulement CE QU'IL A CREE. Meme logique
+   * tout modifier, un Mecanicien seulement CE QU'IL A CREE ou ce qui lui est ASSIGNE. Meme logique
    * que VehiclesService.update, appliquee ici au ticket.
    */
-  private assertCanEdit(userId: string, userRole: Role, workOrder: { createdById: string }) {
-    if (userRole === Role.MECHANIC && workOrder.createdById !== userId) {
-      throw new ForbiddenException('Vous ne pouvez modifier que les tickets que vous avez crees.');
+  private assertCanEdit(
+    userId: string,
+    userRole: Role,
+    workOrder: { createdById: string; assignedMechanicId: string | null },
+  ) {
+    // Createur OU mecanicien assigne : meme regle que Diagnosis/Tasks/Parts/Photos/Notes.
+    if (userRole === Role.MECHANIC && workOrder.createdById !== userId && workOrder.assignedMechanicId !== userId) {
+      throw new ForbiddenException('Vous ne pouvez modifier que les tickets que vous avez crees ou qui vous sont assignes.');
     }
   }
 
@@ -225,7 +238,7 @@ export class WorkOrdersService {
    * avoir cree le ticket ne suffit pas. Tant qu'un Admin/Front Desk ne l'a
    * pas explicitement assigne, le mecanicien ne peut pas en changer le
    * statut, meme si c'est lui qui l'a ouvert. Le contenu du ticket
-   * (update()) reste lui base sur assertCanEdit (createdById).
+   * (update()) suit assertCanEdit (createur OU assigne).
    */
   private assertCanChangeStatus(
     userId: string,
@@ -246,6 +259,17 @@ export class WorkOrdersService {
   ) {
     const workOrder = await this.getOwned(garageId, id);
     this.assertCanEdit(userId, userRole, workOrder);
+
+    if (dto.mileage !== undefined && dto.mileage !== workOrder.mileage) {
+      const vehicle = await this.prisma.vehicle.findUnique({ where: { id: workOrder.vehicleId } });
+      await assertMileageNotDecreasing(this.prisma, {
+        garageId,
+        vehicleId: workOrder.vehicleId,
+        mileage: dto.mileage,
+        vehicleMileage: vehicle?.mileage,
+        before: workOrder.createdAt,
+      });
+    }
 
     const { scheduledAt, ...rest } = dto;
     const data = { ...rest, ...(scheduledAt !== undefined ? { scheduledAt: new Date(scheduledAt) } : {}) };
@@ -318,6 +342,16 @@ export class WorkOrdersService {
         message: `Statut change : ${workOrder.status} -> ${dto.status}`,
         metadata: { field: 'status', old: workOrder.status, new: dto.status },
       });
+
+      // OR termine -> facture "Non payee" visible dans Facturation.
+      if (dto.status === WorkOrderStatus.COMPLETED) {
+        await autoIssueInvoiceOnCompletion(tx, {
+          garageId,
+          workOrderId: id,
+          customerId: workOrder.customerId,
+          actorId: userId,
+        });
+      }
 
       return updated;
     });
