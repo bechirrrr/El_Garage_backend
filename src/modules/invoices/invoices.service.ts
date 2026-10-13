@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { ActivityCategory, InvoiceStatus, Prisma } from '../../generated/prisma/client.js';
+import { syncInvoicePartsTotal } from '../../common/invoice-parts-sync.js';
 import { invoiceTotals } from '../../common/invoice-totals.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import type { CreateInvoiceDto } from './dto/create-invoice.dto.js';
@@ -48,8 +49,8 @@ export class InvoicesService {
    * Section 14/30bis : partsTotal n'est jamais saisi a la creation, il est
    * fige en sommant TOUTES les Parts existantes du ticket (voir le
    * commentaire dans part.prisma). Si des Parts sont ajoutees/modifiees
-   * apres coup, InvoicesService.update permet de corriger partsTotal a la
-   * main -- pas de recalcul automatique a posteriori.
+   * apres coup, InvoicesService.update refait cette somme : le montant
+   * Pieces vient toujours des pieces de l'OR, jamais d'une saisie libre.
    */
   private async computePartsTotal(workOrderId: string) {
     const parts = await this.prisma.part.findMany({
@@ -66,12 +67,17 @@ export class InvoicesService {
    * Une Invoice nait toujours DRAFT (Section 30, Option B deja tranchee) --
    * relation 1-1 avec le WorkOrder, donc une seule creation possible par
    * ticket (ConflictException sinon).
+   *
+   * Exception : une facture ANNULEE peut etre recreee. Comme la relation
+   * reste 1-1, on reutilise la meme ligne, remise a zero en DRAFT (elle n'a
+   * jamais de paiement : cancel() n'est permis qu'en DRAFT/ISSUED).
+   * L'annulation et la recreation restent visibles dans l'historique de l'OR.
    */
   async create(garageId: string, actorId: string, workOrderId: string, dto: CreateInvoiceDto) {
     const workOrder = await this.getWorkOrder(garageId, workOrderId);
 
     const existing = await this.prisma.invoice.findUnique({ where: { workOrderId } });
-    if (existing) {
+    if (existing && existing.status !== InvoiceStatus.CANCELLED) {
       throw new ConflictException('Ce ticket a deja une facture.');
     }
 
@@ -93,21 +99,22 @@ export class InvoicesService {
         : undefined;
 
     return this.prisma.$transaction(async (tx) => {
-      const invoice = await tx.invoice.create({
-        data: {
-          garageId,
-          workOrderId,
-          customerId: workOrder.customerId,
-          laborPrice,
-          partsTotal,
-          subtotal,
-          vatRate,
-          vatAmount,
-          stampDuty,
-          totalPrice,
-          dueDate,
-        },
-      });
+      const amounts = { laborPrice, partsTotal, subtotal, vatRate, vatAmount, stampDuty, totalPrice };
+      const invoice = existing
+        ? await tx.invoice.update({
+            where: { id: existing.id },
+            data: {
+              ...amounts,
+              customerId: workOrder.customerId,
+              status: InvoiceStatus.DRAFT,
+              issuedById: null,
+              issuedAt: null,
+              dueDate: dueDate ?? null,
+            },
+          })
+        : await tx.invoice.create({
+            data: { garageId, workOrderId, customerId: workOrder.customerId, ...amounts, dueDate },
+          });
 
       await this.recordEvent(tx, {
         garageId,
@@ -115,8 +122,9 @@ export class InvoicesService {
         actorId,
         type: 'INVOICE_CREATED',
         category: ActivityCategory.SENSITIVE,
-        message: `Facture creee (brouillon) -- total TTC ${totalPrice.toFixed(3)}`,
+        message: `Facture ${existing ? 'recreee apres annulation' : 'creee'} (brouillon) -- total TTC ${totalPrice.toFixed(3)}`,
         metadata: {
+          recreated: Boolean(existing),
           laborPrice: laborPrice.toFixed(3),
           partsTotal: partsTotal.toFixed(3),
           subtotal: subtotal.toFixed(3),
@@ -136,6 +144,10 @@ export class InvoicesService {
    * modifie APRES un paiement doit rester possible pour le MVP -- juste
    * visible et trace, pas bloque). `afterPayment` journalise ce cas
    * precis explicitement plutot que de le deviner depuis l'historique.
+   *
+   * Pieces HT est toujours RECALCULE depuis les Parts de l'OR : pour
+   * facturer une piece de plus, on ajoute la piece (stock ou hors stock),
+   * pas un montant.
    */
   async update(garageId: string, actorId: string, workOrderId: string, dto: UpdateInvoiceDto) {
     await this.getWorkOrder(garageId, workOrderId);
@@ -146,7 +158,7 @@ export class InvoicesService {
     }
 
     const laborPrice = dto.laborPrice === undefined ? invoice.laborPrice : new Prisma.Decimal(dto.laborPrice);
-    const partsTotal = dto.partsTotal === undefined ? invoice.partsTotal : new Prisma.Decimal(dto.partsTotal);
+    const partsTotal = await this.computePartsTotal(workOrderId);
     // Recalcul avec le taux et le timbre de LA facture (pas ceux du garage aujourd'hui).
     const { subtotal, vatAmount, totalPrice } = invoiceTotals(laborPrice, partsTotal, invoice.vatRate, invoice.stampDuty);
 
@@ -194,6 +206,8 @@ export class InvoicesService {
           field: 'totalPrice',
           old: invoice.totalPrice.toFixed(3),
           new: totalPrice.toFixed(3),
+          oldPartsTotal: invoice.partsTotal.toFixed(3),
+          newPartsTotal: partsTotal.toFixed(3),
           afterPayment,
           ...(status !== invoice.status ? { oldStatus: invoice.status, newStatus: status } : {}),
         },
@@ -206,6 +220,8 @@ export class InvoicesService {
   /** DRAFT -> ISSUED (Section 32 : "Creates the Invoice (status = ISSUED)"). */
   async issue(garageId: string, actorId: string, workOrderId: string) {
     await this.getWorkOrder(garageId, workOrderId);
+    // Filet de securite : on n'emet jamais une facture dont le total Pieces est en retard sur l'OR.
+    await syncInvoicePartsTotal(this.prisma, { garageId, workOrderId, actorId });
     const invoice = await this.getInvoiceOrThrow(workOrderId);
 
     if (invoice.status !== InvoiceStatus.DRAFT) {

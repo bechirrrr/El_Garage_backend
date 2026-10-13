@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { ActivityCategory, Role } from '../../generated/prisma/client.js';
+import { ActivityCategory, Role, WorkOrderStatus } from '../../generated/prisma/client.js';
+import { autoIssueInvoiceOnCompletion } from '../../common/invoice-auto-issue.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { assertMileageNotDecreasing } from '../../common/mileage.js';
 import { nextWorkOrderNumber } from '../../common/work-order-number.js';
@@ -315,6 +316,16 @@ export class WorkOrdersService {
         message: `Statut change : ${workOrder.status} -> ${dto.status}`,
         metadata: { field: 'status', old: workOrder.status, new: dto.status },
       });
+
+      // OR termine -> facture "Non payee" visible dans Facturation.
+      if (dto.status === WorkOrderStatus.COMPLETED) {
+        await autoIssueInvoiceOnCompletion(tx, {
+          garageId,
+          workOrderId: id,
+          customerId: workOrder.customerId,
+          actorId: userId,
+        });
+      }
 
       return updated;
     });

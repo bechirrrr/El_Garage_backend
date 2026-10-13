@@ -1,4 +1,4 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
 import { Roles } from '../../common/decorators/roles.decorator.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
@@ -6,6 +6,7 @@ import { RolesGuard } from '../../common/guards/roles.guard.js';
 import type { CurrentUserPayload } from '../../common/types/current-user.type.js';
 import { Role } from '../../generated/prisma/client.js';
 import { BillingService } from './billing.service.js';
+import { CreateDirectInvoiceDto } from './dto/create-direct-invoice.dto.js';
 import { PeriodQueryDto } from './dto/period-query.dto.js';
 
 /**
@@ -22,6 +23,12 @@ export class BillingController {
   @Get('invoices')
   findInvoices(@CurrentUser() user: CurrentUserPayload) {
     return this.billingService.findAllInvoices(user.garageId as string);
+  }
+
+  /** Facture directe : client/vehicule existants ou crees, OR termine cree en coulisse. */
+  @Post('invoices')
+  createDirect(@CurrentUser() user: CurrentUserPayload, @Body() dto: CreateDirectInvoiceDto) {
+    return this.billingService.createDirect(user.garageId as string, user.id, dto);
   }
 
   @Get('payments')

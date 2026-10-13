@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma, Role } from '../../generated/prisma/client.js';
+import { InvoiceStatus, Prisma, Role } from '../../generated/prisma/client.js';
+import { syncInvoicePartsTotal } from '../../common/invoice-parts-sync.js';
 import { MOVE, moveStock } from '../stock/stock-movements.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import type { CreatePartDto } from './dto/create-part.dto.js';
@@ -32,6 +33,22 @@ export class PartsService {
     return workOrder;
   }
 
+  /**
+   * Facture deja encaissee (PAID ou PARTIALLY_PAID) : une piece ajoutee depuis
+   * l'onglet Pieces sortirait du stock sans jamais etre facturee. L'ajout
+   * n'est alors accepte que depuis la modification de la facture
+   * (`invoiceEdit`), reservee a ADMIN/FRONT_DESK comme la facture elle-meme.
+   */
+  private async assertInvoiceAllowsNewPart(workOrderId: string, userRole: Role, invoiceEdit: boolean) {
+    const invoice = await this.prisma.invoice.findUnique({ where: { workOrderId }, select: { status: true } });
+    const collected = invoice?.status === InvoiceStatus.PAID || invoice?.status === InvoiceStatus.PARTIALLY_PAID;
+    if (collected && !(invoiceEdit && userRole !== Role.MECHANIC)) {
+      throw new BadRequestException(
+        'La facture de cet OR est déjà encaissée : ajoutez la pièce depuis « Modifier » la facture.',
+      );
+    }
+  }
+
   /** Lecture ouverte aux 3 roles garage-scoped (visibilite, Section 20). */
   async findAllForWorkOrder(garageId: string, workOrderId: string) {
     const workOrder = await this.prisma.workOrder.findUnique({ where: { id: workOrderId } });
@@ -46,6 +63,9 @@ export class PartsService {
   }
 
   /**
+   * Apres chaque ajout / modification / suppression, la facture de l'OR (si
+   * elle existe) est realignee sur les pieces : voir syncInvoicePartsTotal.
+   *
    * Pas d'ActivityEvent ici, volontairement : meme decision que pour Task
    * et Symptom/DiagnosticTest -- une ligne de piece est un element de
    * checklist/liste, pas un evenement de timeline (Section 17). Le statut
@@ -53,13 +73,20 @@ export class PartsService {
    * lisant les Parts au statut ORDERED, pas via un log d'evenements.
    */
   async create(garageId: string, userId: string, userRole: Role, workOrderId: string, dto: CreatePartDto) {
+    const part = await this.createPart(garageId, userId, userRole, workOrderId, dto);
+    await syncInvoicePartsTotal(this.prisma, { garageId, workOrderId, actorId: userId });
+    return part;
+  }
+
+  private async createPart(garageId: string, userId: string, userRole: Role, workOrderId: string, dto: CreatePartDto) {
     await this.getEditableWorkOrder(garageId, userId, userRole, workOrderId);
+    await this.assertInvoiceAllowsNewPart(workOrderId, userRole, dto.invoiceEdit === true);
 
     if (!dto.stockItemId) {
       if (!dto.name || dto.unitPrice === undefined) {
         throw new BadRequestException('Nom et prix obligatoires pour une pièce hors stock.');
       }
-      const { stockItemId: _none, ...data } = dto;
+      const { stockItemId: _none, invoiceEdit: _flag, ...data } = dto;
       return this.prisma.part.create({ data: { garageId, workOrderId, ...data, name: dto.name, unitPrice: dto.unitPrice } });
     }
 
@@ -111,6 +138,19 @@ export class PartsService {
     partId: string,
     dto: UpdatePartDto,
   ) {
+    const part = await this.updatePart(garageId, userId, userRole, workOrderId, partId, dto);
+    await syncInvoicePartsTotal(this.prisma, { garageId, workOrderId, actorId: userId });
+    return part;
+  }
+
+  private async updatePart(
+    garageId: string,
+    userId: string,
+    userRole: Role,
+    workOrderId: string,
+    partId: string,
+    dto: UpdatePartDto,
+  ) {
     await this.getEditableWorkOrder(garageId, userId, userRole, workOrderId);
     const part = await this.getOwnedPart(workOrderId, partId);
 
@@ -135,6 +175,12 @@ export class PartsService {
   }
 
   async remove(garageId: string, userId: string, userRole: Role, workOrderId: string, partId: string) {
+    const part = await this.removePart(garageId, userId, userRole, workOrderId, partId);
+    await syncInvoicePartsTotal(this.prisma, { garageId, workOrderId, actorId: userId });
+    return part;
+  }
+
+  private async removePart(garageId: string, userId: string, userRole: Role, workOrderId: string, partId: string) {
     await this.getEditableWorkOrder(garageId, userId, userRole, workOrderId);
     const part = await this.getOwnedPart(workOrderId, partId);
 

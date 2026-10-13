@@ -1,4 +1,6 @@
-import { IsIn, IsInt, IsOptional, IsString, Max, Min, MinLength } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsIn, IsInt, IsOptional, IsString, Matches, Max, Min, MinLength } from 'class-validator';
+import { normalizePlate } from '../../../common/plate.js';
 import { FuelType, Transmission } from '../../../generated/prisma/client.js';
 
 /**
@@ -28,8 +30,13 @@ export class CreateVehicleDto {
   @Max(new Date().getFullYear() + 1)
   year?: number;
 
+  // Normalise en "203 TU 5561" / "RS 123456" ; une saisie hors format reste
+  // telle quelle et est rejetee par @Matches.
+  @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? (normalizePlate(value) ?? value) : value))
   @IsString()
-  @MinLength(1)
+  @Matches(/^(\d{1,3} TU \d{1,4}|RS \d{1,6})$/, {
+    message: 'Immatriculation invalide. Format attendu : 203 TU 5561 ou RS 123456.',
+  })
   plate!: string;
 
   @IsOptional()
