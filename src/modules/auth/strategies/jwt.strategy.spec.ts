@@ -1,4 +1,5 @@
-import { UnauthorizedException } from '@nestjs/common';
+import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
+import { passwordFingerprint } from '../../../common/password-fingerprint.js';
 import { JwtStrategy } from './jwt.strategy.js';
 
 // passport-jwt exige un secret des la construction de la strategie (avant
@@ -15,14 +16,15 @@ process.env.JWT_SECRET ??= 'test-secret';
 function makeStrategy(userInDb: any) {
   const prisma = {
     user: {
-      findUnique: () => Promise.resolve(userInDb),
+      findUnique: () => Promise.resolve(userInDb && { passwordHash: 'hash', ...userInDb }),
     },
   } as any;
 
   return new JwtStrategy(prisma);
 }
 
-const payload = { sub: 'user-1', garageId: 'garage-1', role: 'ADMIN' as const };
+const payload = { sub: 'user-1', garageId: 'garage-1', role: 'ADMIN' as const, pv: passwordFingerprint('hash') };
+const req = { originalUrl: '/api/customers' };
 
 describe('JwtStrategy.validate', () => {
   it('accepte un utilisateur actif dont le Garage est ACTIVE', async () => {
@@ -34,7 +36,7 @@ describe('JwtStrategy.validate', () => {
       garage: { status: 'ACTIVE' },
     });
 
-    await expect(strategy.validate(payload)).resolves.toEqual({
+    await expect(strategy.validate(req, payload)).resolves.toEqual({
       id: 'user-1',
       garageId: 'garage-1',
       role: 'ADMIN',
@@ -50,7 +52,7 @@ describe('JwtStrategy.validate', () => {
       garage: { status: 'SUSPENDED' },
     });
 
-    await expect(strategy.validate(payload)).rejects.toThrow(UnauthorizedException);
+    await expect(strategy.validate(req, payload)).rejects.toThrow(UnauthorizedException);
   });
 
   it('rejette si le Garage est REJECTED', async () => {
@@ -62,7 +64,7 @@ describe('JwtStrategy.validate', () => {
       garage: { status: 'REJECTED' },
     });
 
-    await expect(strategy.validate(payload)).rejects.toThrow(UnauthorizedException);
+    await expect(strategy.validate(req, payload)).rejects.toThrow(UnauthorizedException);
   });
 
   it('rejette si le Garage est toujours PENDING_APPROVAL', async () => {
@@ -74,7 +76,7 @@ describe('JwtStrategy.validate', () => {
       garage: { status: 'PENDING_APPROVAL' },
     });
 
-    await expect(strategy.validate(payload)).rejects.toThrow(UnauthorizedException);
+    await expect(strategy.validate(req, payload)).rejects.toThrow(UnauthorizedException);
   });
 
   it("rejette si le compte a ete desactive (isActive = false)", async () => {
@@ -87,14 +89,14 @@ describe('JwtStrategy.validate', () => {
     });
 
     await expect(
-      strategy.validate({ ...payload, role: 'MECHANIC' }),
+      strategy.validate(req, { ...payload, role: 'MECHANIC' }),
     ).rejects.toThrow(UnauthorizedException);
   });
 
   it("rejette si l'utilisateur n'existe plus en base", async () => {
     const strategy = makeStrategy(null);
 
-    await expect(strategy.validate(payload)).rejects.toThrow(UnauthorizedException);
+    await expect(strategy.validate(req, payload)).rejects.toThrow(UnauthorizedException);
   });
 
   it("accepte un OWNER (garageId null) sans jamais regarder de Garage", async () => {
@@ -107,7 +109,41 @@ describe('JwtStrategy.validate', () => {
     });
 
     await expect(
-      strategy.validate({ sub: 'owner-1', garageId: null, role: 'OWNER' }),
+      strategy.validate(req, { ...payload, sub: 'owner-1', garageId: null, role: 'OWNER' }),
     ).resolves.toEqual({ id: 'owner-1', garageId: null, role: 'OWNER' });
+  });
+
+  it('rejette un token emis avant le dernier changement de mot de passe', async () => {
+    const strategy = makeStrategy({
+      id: 'user-1',
+      garageId: 'garage-1',
+      role: 'ADMIN',
+      isActive: true,
+      passwordHash: 'nouveau-hash',
+      garage: { status: 'ACTIVE' },
+    });
+
+    await expect(strategy.validate(req, payload)).rejects.toThrow(UnauthorizedException);
+  });
+
+  it('rejette un ancien token sans empreinte de mot de passe', async () => {
+    const strategy = makeStrategy({ id: 'user-1', garageId: 'garage-1', role: 'ADMIN', isActive: true, garage: { status: 'ACTIVE' } });
+
+    await expect(strategy.validate(req, { ...payload, pv: undefined })).rejects.toThrow(UnauthorizedException);
+  });
+
+  it('mot de passe provisoire : bloque toute route sauf le changement de mot de passe', async () => {
+    const strategy = makeStrategy({
+      id: 'user-1',
+      garageId: 'garage-1',
+      role: 'MECHANIC',
+      isActive: true,
+      mustChangePassword: true,
+      garage: { status: 'ACTIVE' },
+    });
+
+    await expect(strategy.validate(req, payload)).rejects.toThrow(ForbiddenException);
+    await expect(strategy.validate({ originalUrl: '/api/auth/change-password' }, payload)).resolves.toMatchObject({ id: 'user-1' });
+    await expect(strategy.validate({ originalUrl: '/api/auth/me?x=1' }, payload)).resolves.toMatchObject({ id: 'user-1' });
   });
 });

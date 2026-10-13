@@ -3,6 +3,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
 import { Roles } from '../../common/decorators/roles.decorator.js';
 import { GarageScopeGuard } from '../../common/guards/garage-scope.guard.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
+import { RateLimitGuard } from '../../common/guards/rate-limit.guard.js';
 import { RolesGuard } from '../../common/guards/roles.guard.js';
 import type { CurrentUserPayload } from '../../common/types/current-user.type.js';
 import { Role } from '../../generated/prisma/client.js';
@@ -20,6 +21,7 @@ export class GaragesController {
   constructor(private readonly garagesService: GaragesService) {}
 
   @Post('register')
+  @UseGuards(new RateLimitGuard(5, 60 * 60_000))
   register(@Body() dto: RegisterGarageDto) {
     return this.garagesService.register(dto);
   }

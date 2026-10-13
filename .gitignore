@@ -33,3 +33,5 @@ src/generated/
 
 # Coverage
 coverage/
+# Cache de compilation TypeScript (fichier genere)
+*.tsbuildinfo

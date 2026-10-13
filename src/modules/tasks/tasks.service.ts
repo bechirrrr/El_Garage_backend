@@ -18,13 +18,21 @@ export class TasksService {
     userId: string,
     userRole: Role,
     workOrderId: string,
+    taskAssignedToUser = false,
   ) {
     const workOrder = await this.prisma.workOrder.findUnique({ where: { id: workOrderId } });
     if (!workOrder || workOrder.garageId !== garageId) {
       throw new NotFoundException('Ticket introuvable.');
     }
-    if (userRole === Role.MECHANIC && workOrder.createdById !== userId) {
-      throw new ForbiddenException('Vous ne pouvez modifier que les tickets que vous avez crees.');
+    // Un Mecanicien travaille sur un ticket s'il l'a cree OU s'il lui est assigne
+    // (flux normal : le Front Desk cree l'OR puis l'assigne).
+    if (
+      userRole === Role.MECHANIC &&
+      !taskAssignedToUser &&
+      workOrder.createdById !== userId &&
+      workOrder.assignedMechanicId !== userId
+    ) {
+      throw new ForbiddenException('Vous ne pouvez modifier que les tickets que vous avez crees ou qui vous sont assignes.');
     }
     return workOrder;
   }
@@ -83,8 +91,10 @@ export class TasksService {
     taskId: string,
     dto: UpdateTaskDto,
   ) {
-    await this.getEditableWorkOrder(garageId, userId, userRole, workOrderId);
-    await this.getOwnedTask(workOrderId, taskId);
+    const task = await this.getOwnedTask(workOrderId, taskId);
+    // Une tache assignee directement a ce Mecanicien reste modifiable par lui,
+    // meme si l'OR appartient a un collegue (elle apparait dans "Mes taches").
+    await this.getEditableWorkOrder(garageId, userId, userRole, workOrderId, task.assignedMechanicId === userId);
     await this.assertValidAssignee(garageId, dto.assignedMechanicId);
 
     return this.prisma.task.update({ where: { id: taskId }, data: dto });

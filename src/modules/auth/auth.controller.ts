@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
+import { RateLimitGuard } from '../../common/guards/rate-limit.guard.js';
 import type { CurrentUserPayload } from '../../common/types/current-user.type.js';
 import { AuthService } from './auth.service.js';
 import { ChangePasswordDto } from './dto/change-password.dto.js';
@@ -10,7 +11,10 @@ import { LoginDto } from './dto/login.dto.js';
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
+  // 20 tentatives / 15 min par IP : freine le brute-force sans gener un atelier
+  // ou plusieurs employes se connectent depuis la meme connexion.
   @Post('login')
+  @UseGuards(new RateLimitGuard(20, 15 * 60_000))
   login(@Body() dto: LoginDto) {
     return this.authService.login(dto);
   }
@@ -29,7 +33,7 @@ export class AuthController {
 
   /** Changer son propre mot de passe (obligatoire a la 1re connexion d'un compte cree par l'Admin). */
   @Post('change-password')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, new RateLimitGuard(10, 15 * 60_000))
   changePassword(@CurrentUser() user: CurrentUserPayload, @Body() dto: ChangePasswordDto) {
     return this.authService.changePassword(user.id, dto);
   }

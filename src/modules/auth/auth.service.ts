@@ -1,12 +1,21 @@
 import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
+import { passwordFingerprint } from '../../common/password-fingerprint.js';
 import { normalizePhone } from '../../common/phone.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import type { ChangePasswordDto } from './dto/change-password.dto.js';
 import type { LoginDto } from './dto/login.dto.js';
 
 const BCRYPT_ROUNDS = 10;
+
+/**
+ * Hash factice compare quand l'identifiant n'existe pas : sans lui, la
+ * reponse "compte inconnu" serait nettement plus rapide que "mauvais mot de
+ * passe" (pas de calcul bcrypt), ce qui permettrait de deviner quels
+ * emails/telephones ont un compte en mesurant le temps de reponse.
+ */
+const DUMMY_HASH = bcrypt.hashSync('compte-inexistant', BCRYPT_ROUNDS);
 
 @Injectable()
 export class AuthService {
@@ -36,6 +45,7 @@ export class AuthService {
     });
 
     if (!user || !user.passwordHash) {
+      await bcrypt.compare(dto.password, DUMMY_HASH);
       throw new UnauthorizedException('Identifiant ou mot de passe incorrect.');
     }
 
@@ -48,8 +58,7 @@ export class AuthService {
       throw new UnauthorizedException('Ce compte est desactive.');
     }
 
-    const payload = { sub: user.id, garageId: user.garageId, role: user.role };
-    const accessToken = this.jwtService.sign(payload);
+    const accessToken = this.signToken({ ...user, passwordHash: user.passwordHash });
 
     const { passwordHash: _omit, garage, ...userWithoutPassword } = user;
     return {
@@ -59,6 +68,15 @@ export class AuthService {
       // Nom du garage pour l'affichage (barre laterale) -- null pour un OWNER.
       garageName: garage?.name ?? null,
     };
+  }
+
+  private signToken(user: { id: string; garageId: string | null; role: string; passwordHash: string }) {
+    return this.jwtService.sign({
+      sub: user.id,
+      garageId: user.garageId,
+      role: user.role,
+      pv: passwordFingerprint(user.passwordHash),
+    });
   }
 
   /**
@@ -85,6 +103,8 @@ export class AuthService {
       where: { id: userId },
       data: { passwordHash, mustChangePassword: false },
     });
-    return { success: true };
+    // Le changement invalide tous les anciens tokens (empreinte `pv`) : on en
+    // renvoie un nouveau pour que la session en cours, elle, continue.
+    return { success: true, accessToken: this.signToken({ ...user, passwordHash }) };
   }
 }

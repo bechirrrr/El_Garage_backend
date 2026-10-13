@@ -13,6 +13,7 @@ function makePrismaMock(overrides: Record<string, any> = {}) {
       update: (args: any) => Promise.resolve({ id: args.where.id, ...args.data }),
       delete: (args: any) => Promise.resolve({ id: args.where.id }),
     },
+    workOrder: { aggregate: () => Promise.resolve({ _max: { mileage: null } }), },
     ...overrides,
   } as any;
 }
