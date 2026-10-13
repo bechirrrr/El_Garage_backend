@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
+import { AllowTemporaryPassword } from '../../common/decorators/allow-temporary-password.decorator.js';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
 import type { CurrentUserPayload } from '../../common/types/current-user.type.js';
@@ -23,6 +24,7 @@ export class AuthController {
    */
   @Get('me')
   @UseGuards(JwtAuthGuard)
+  @AllowTemporaryPassword()
   me(@CurrentUser() user: CurrentUserPayload) {
     return user;
   }
@@ -30,6 +32,7 @@ export class AuthController {
   /** Changer son propre mot de passe (obligatoire a la 1re connexion d'un compte cree par l'Admin). */
   @Post('change-password')
   @UseGuards(JwtAuthGuard)
+  @AllowTemporaryPassword()
   changePassword(@CurrentUser() user: CurrentUserPayload, @Body() dto: ChangePasswordDto) {
     return this.authService.changePassword(user.id, dto);
   }

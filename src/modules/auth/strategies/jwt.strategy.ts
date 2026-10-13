@@ -42,21 +42,34 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(payload: JwtPayload): Promise<CurrentUserPayload> {
-    const user = await this.prisma.user.findUnique({
-      where: { id: payload.sub },
-      include: { garage: true },
+    // Chemin normal (99 % des requetes) : UNE seule requete SQL. Les conditions
+    // "compte actif" et "garage ACTIVE" (sauf OWNER, garageId null) sont dans
+    // le WHERE -- Postgres les verifie via une sous-requete sur garages -- et on
+    // ne lit que les 4 colonnes utiles. Avant : 2 requetes (user + garage) et
+    // ~36 colonnes (dont le hash du mot de passe) a chaque appel authentifie.
+    const user = await this.prisma.user.findFirst({
+      where: {
+        id: payload.sub,
+        isActive: true,
+        OR: [{ garageId: null }, { garage: { status: GarageStatus.ACTIVE } }],
+      },
+      select: { id: true, garageId: true, role: true, mustChangePassword: true },
     });
+    if (user) {
+      return { id: user.id, garageId: user.garageId, role: user.role, mustChangePassword: user.mustChangePassword };
+    }
 
-    if (!user || !user.isActive) {
+    // Chemin d'echec (rare) : une 2e lecture, seulement pour renvoyer le bon message.
+    const existing = await this.prisma.user.findUnique({
+      where: { id: payload.sub },
+      select: { isActive: true },
+    });
+    if (!existing || !existing.isActive) {
       throw new UnauthorizedException('Compte introuvable ou desactive.');
     }
-
     // OWNER (garageId null) n'est jamais concerne par le statut d'un Garage --
     // seuls ADMIN/MECHANIC/FRONT_DESK, scopes a un Garage, le sont.
-    if (user.garageId && user.garage?.status !== GarageStatus.ACTIVE) {
-      throw new UnauthorizedException("L'acces a ce garage n'est plus autorise.");
-    }
-
-    return { id: user.id, garageId: user.garageId, role: user.role };
+    throw new UnauthorizedException("L'acces a ce garage n'est plus autorise.");
   }
+
 }

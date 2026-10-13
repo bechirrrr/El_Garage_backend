@@ -6,6 +6,7 @@ import type { AssignWorkOrderDto } from './dto/assign-work-order.dto.js';
 import type { CreateWorkOrderDto } from './dto/create-work-order.dto.js';
 import type { UpdateWorkOrderStatusDto } from './dto/update-work-order-status.dto.js';
 import type { UpdateWorkOrderDto } from './dto/update-work-order.dto.js';
+import { listFilterWhere, type ListFilterDto } from '../../common/dto/list-filter.dto.js';
 
 /**
  * Forme minimale commune pour journaliser un ActivityEvent, que ce soit via
@@ -73,40 +74,65 @@ export class WorkOrdersService {
    * voient TOUS les tickets du garage, pas seulement les leurs (contrairement
    * a la modification). Pas de filtre par createdById/assignedMechanicId ici.
    */
-  async findAllForGarage(garageId: string, role?: Role) {
+  async findAllForGarage(garageId: string, role?: Role, filter?: ListFilterDto) {
     // Montant de la facture (fiche client / fiche vehicule : "Total facture").
     // Jamais pour un MECHANIC : il n'a aucun acces a la facturation (InvoicesController
     // lui renvoie 403), donc la liste ne doit pas lui donner ces montants par la bande.
     const withInvoice = role !== undefined && role !== Role.MECHANIC;
     const workOrders = await this.prisma.workOrder.findMany({
-      where: { garageId },
+      where: { garageId, ...listFilterWhere(filter) },
       include: {
         vehicle: { select: { id: true, make: true, model: true, plate: true } },
         customer: { select: { id: true, name: true } },
         assignedMechanic: { select: { id: true, name: true } },
         ...(withInvoice ? { invoice: { select: { totalPrice: true, status: true } } } : {}),
-        // Ecran Atelier : progression des taches, pieces attendues, et depuis quand
-        // l'OR est dans son etape (dernier changement de statut). Seulement des
-        // statuts / dates, jamais le contenu d'un evenement SENSITIVE.
-        tasks: { select: { status: true } },
+        // Ecran Atelier : pieces attendues (peu nombreuses, filtrees sur ORDERED).
         parts: { where: { status: 'ORDERED' }, select: { name: true } },
-        activityEvents: {
-          where: { type: 'STATUS_CHANGED' },
-          orderBy: { createdAt: 'desc' },
-          take: 1,
-          select: { createdAt: true },
-        },
       },
       orderBy: { createdAt: 'desc' },
     });
 
-    return workOrders.map(({ tasks, parts, activityEvents, ...wo }) => ({
+    // Progression des taches et date du dernier changement de statut : calculees
+    // par Postgres (GROUP BY) au lieu de charger chaque tache / chaque evenement.
+    // Avant : `include: { tasks }` ramenait TOUTES les taches du garage juste
+    // pour les compter, et `activityEvents: { take: 1 }` ramenait tous les
+    // evenements STATUS_CHANGED (Prisma applique ce `take` en memoire quand il
+    // y a plusieurs parents). Mesure sur 3 000 OR : ~39 000 lignes lues en moins.
+    // Seulement des compteurs / dates : jamais le contenu d'un evenement SENSITIVE.
+    const ids = workOrders.map((wo) => wo.id);
+    const [taskCounts, lastStatusChanges] = ids.length
+      ? await Promise.all([
+          this.prisma.task.groupBy({
+            by: ['workOrderId', 'status'],
+            where: { garageId, workOrderId: { in: ids } },
+            _count: { _all: true },
+          }),
+          this.prisma.activityEvent.groupBy({
+            by: ['workOrderId'],
+            where: { garageId, type: 'STATUS_CHANGED', workOrderId: { in: ids } },
+            _max: { createdAt: true },
+          }),
+        ])
+      : [[], []];
+
+    const tasksByWorkOrder = new Map<string, { total: number; done: number }>();
+    for (const row of taskCounts) {
+      const entry = tasksByWorkOrder.get(row.workOrderId) ?? { total: 0, done: 0 };
+      entry.total += row._count._all;
+      if (row.status === 'DONE') entry.done += row._count._all;
+      tasksByWorkOrder.set(row.workOrderId, entry);
+    }
+    const statusSinceByWorkOrder = new Map(
+      lastStatusChanges.map((row) => [row.workOrderId as string, row._max.createdAt]),
+    );
+
+    return workOrders.map(({ parts, ...wo }) => ({
       ...wo,
-      tasksTotal: tasks?.length ?? 0,
-      tasksDone: tasks?.filter((t) => t.status === 'DONE').length ?? 0,
+      tasksTotal: tasksByWorkOrder.get(wo.id)?.total ?? 0,
+      tasksDone: tasksByWorkOrder.get(wo.id)?.done ?? 0,
       partsOrdered: parts?.map((p) => p.name) ?? [],
       // Pas encore de changement de statut : l'OR est dans sa 1re etape depuis son ouverture.
-      statusSince: activityEvents?.[0]?.createdAt ?? wo.createdAt,
+      statusSince: statusSinceByWorkOrder.get(wo.id) ?? wo.createdAt,
     }));
   }
 

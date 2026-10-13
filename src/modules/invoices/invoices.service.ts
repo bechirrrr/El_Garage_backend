@@ -92,6 +92,8 @@ export class InvoicesService {
         ? new Date(Date.now() + garage.invoiceDueDays * 86_400_000)
         : undefined;
 
+    // Deux creations simultanees : la contrainte @unique(workOrderId) rejette
+    // la 2e (P2002) -> on renvoie le meme 409 que le controle ci-dessus, pas un 500.
     return this.prisma.$transaction(async (tx) => {
       const invoice = await tx.invoice.create({
         data: {
@@ -128,7 +130,40 @@ export class InvoicesService {
       });
 
       return invoice;
+    }).catch((error: unknown) => {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException('Ce ticket a deja une facture.');
+      }
+      throw error;
     });
+  }
+
+  /**
+   * Verrouille la ligne de la facture (SELECT ... FOR UPDATE) puis la relit,
+   * DANS la transaction passee en parametre.
+   *
+   * Pourquoi : toutes les operations qui changent le statut ou le montant
+   * (update, issue, cancel, recordPayment) lisaient la facture AVANT leur
+   * transaction. Deux requetes simultanees voyaient donc le meme etat --
+   * ex. deux paiements de 60 sur une facture de 100 lisaient tous les deux
+   * "0 deja paye" et passaient (120 encaisses). Avec le verrou, la 2e
+   * requete attend la fin de la 1re, puis relit l'etat a jour : les
+   * controles (statut, solde restant) se font toujours sur des donnees
+   * fraiches. Meme principe que le compteur de numeros d'OR.
+   */
+  private async lockInvoice(tx: Prisma.TransactionClient, workOrderId: string) {
+    await tx.$queryRaw`SELECT id FROM invoices WHERE work_order_id = ${workOrderId} FOR UPDATE`;
+    const invoice = await tx.invoice.findUnique({ where: { workOrderId } });
+    if (!invoice) {
+      throw new NotFoundException('Aucune facture pour ce ticket.');
+    }
+    return invoice;
+  }
+
+  /** Somme des paiements deja enregistres sur une facture (0 si aucun). */
+  private async sumPayments(tx: Prisma.TransactionClient, invoiceId: string) {
+    const paid = await tx.payment.aggregate({ where: { invoiceId }, _sum: { amount: true } });
+    return paid._sum.amount ?? new Prisma.Decimal(0);
   }
 
   /**
@@ -136,24 +171,45 @@ export class InvoicesService {
    * modifie APRES un paiement doit rester possible pour le MVP -- juste
    * visible et trace, pas bloque). `afterPayment` journalise ce cas
    * precis explicitement plutot que de le deviner depuis l'historique.
+   *
+   * Si des paiements existent deja :
+   *  - le nouveau total ne peut pas descendre SOUS ce qui a deja ete encaisse
+   *    (sinon il faudrait un remboursement, non modelise pour le MVP) ;
+   *  - le statut est recalcule : PAID si le total est exactement couvert,
+   *    PARTIALLY_PAID sinon (ex. une facture PAID dont le prix augmente
+   *    redevient PARTIALLY_PAID, il reste un solde a encaisser).
    */
   async update(garageId: string, actorId: string, workOrderId: string, dto: UpdateInvoiceDto) {
     await this.getWorkOrder(garageId, workOrderId);
-    const invoice = await this.getInvoiceOrThrow(workOrderId);
-
-    if (invoice.status === InvoiceStatus.CANCELLED) {
-      throw new BadRequestException('Facture annulee, non modifiable.');
-    }
-
-    const laborPrice = dto.laborPrice === undefined ? invoice.laborPrice : new Prisma.Decimal(dto.laborPrice);
-    const partsTotal = dto.partsTotal === undefined ? invoice.partsTotal : new Prisma.Decimal(dto.partsTotal);
-    // Recalcul avec le taux et le timbre de LA facture (pas ceux du garage aujourd'hui).
-    const { subtotal, vatAmount, totalPrice } = invoiceTotals(laborPrice, partsTotal, invoice.vatRate, invoice.stampDuty);
-
-    const paymentsCount = await this.prisma.payment.count({ where: { invoiceId: invoice.id } });
-    const afterPayment = paymentsCount > 0 && !totalPrice.equals(invoice.totalPrice);
 
     return this.prisma.$transaction(async (tx) => {
+      const invoice = await this.lockInvoice(tx, workOrderId);
+
+      if (invoice.status === InvoiceStatus.CANCELLED) {
+        throw new BadRequestException('Facture annulee, non modifiable.');
+      }
+
+      const laborPrice = dto.laborPrice === undefined ? invoice.laborPrice : new Prisma.Decimal(dto.laborPrice);
+      const partsTotal = dto.partsTotal === undefined ? invoice.partsTotal : new Prisma.Decimal(dto.partsTotal);
+      // Recalcul avec le taux et le timbre de LA facture (pas ceux du garage aujourd'hui).
+      const { subtotal, vatAmount, totalPrice } = invoiceTotals(laborPrice, partsTotal, invoice.vatRate, invoice.stampDuty);
+
+      const alreadyPaid = await this.sumPayments(tx, invoice.id);
+      const hasPayments = alreadyPaid.greaterThan(0);
+      const afterPayment = hasPayments && !totalPrice.equals(invoice.totalPrice);
+
+      if (hasPayments && totalPrice.lessThan(alreadyPaid)) {
+        throw new BadRequestException(
+          `Le nouveau total (${totalPrice.toFixed(3)}) est inferieur au montant deja encaisse (${alreadyPaid.toFixed(3)}).`,
+        );
+      }
+
+      const status = hasPayments
+        ? alreadyPaid.equals(totalPrice)
+          ? InvoiceStatus.PAID
+          : InvoiceStatus.PARTIALLY_PAID
+        : invoice.status;
+
       const updated = await tx.invoice.update({
         where: { id: invoice.id },
         data: {
@@ -162,6 +218,7 @@ export class InvoicesService {
           subtotal,
           vatAmount,
           totalPrice,
+          status,
           dueDate: dto.dueDate === undefined ? undefined : new Date(dto.dueDate),
         },
       });
@@ -180,6 +237,7 @@ export class InvoicesService {
           old: invoice.totalPrice.toFixed(3),
           new: totalPrice.toFixed(3),
           afterPayment,
+          ...(status !== invoice.status ? { oldStatus: invoice.status, newStatus: status } : {}),
         },
       });
 
@@ -190,13 +248,14 @@ export class InvoicesService {
   /** DRAFT -> ISSUED (Section 32 : "Creates the Invoice (status = ISSUED)"). */
   async issue(garageId: string, actorId: string, workOrderId: string) {
     await this.getWorkOrder(garageId, workOrderId);
-    const invoice = await this.getInvoiceOrThrow(workOrderId);
-
-    if (invoice.status !== InvoiceStatus.DRAFT) {
-      throw new BadRequestException('Seule une facture en brouillon peut etre emise.');
-    }
 
     return this.prisma.$transaction(async (tx) => {
+      const invoice = await this.lockInvoice(tx, workOrderId);
+
+      if (invoice.status !== InvoiceStatus.DRAFT) {
+        throw new BadRequestException('Seule une facture en brouillon peut etre emise.');
+      }
+
       const updated = await tx.invoice.update({
         where: { id: invoice.id },
         data: { status: InvoiceStatus.ISSUED, issuedById: actorId, issuedAt: new Date() },
@@ -221,16 +280,21 @@ export class InvoicesService {
    * partiel : l'argent a deja change de mains, annuler la facture a ce
    * stade masquerait un vrai mouvement financier (a rouvrir si un jour un
    * vrai flux de remboursement est modelise).
+   *
+   * Le statut est relu sous verrou : un paiement enregistre au meme moment
+   * passe soit avant (-> annulation refusee), soit apres (-> paiement refuse
+   * car la facture est CANCELLED), jamais les deux.
    */
   async cancel(garageId: string, actorId: string, workOrderId: string) {
     await this.getWorkOrder(garageId, workOrderId);
-    const invoice = await this.getInvoiceOrThrow(workOrderId);
-
-    if (invoice.status !== InvoiceStatus.DRAFT && invoice.status !== InvoiceStatus.ISSUED) {
-      throw new BadRequestException('Cette facture ne peut plus etre annulee dans son etat actuel.');
-    }
 
     return this.prisma.$transaction(async (tx) => {
+      const invoice = await this.lockInvoice(tx, workOrderId);
+
+      if (invoice.status !== InvoiceStatus.DRAFT && invoice.status !== InvoiceStatus.ISSUED) {
+        throw new BadRequestException('Cette facture ne peut plus etre annulee dans son etat actuel.');
+      }
+
       const updated = await tx.invoice.update({
         where: { id: invoice.id },
         data: { status: InvoiceStatus.CANCELLED },
@@ -268,32 +332,32 @@ export class InvoicesService {
    * (a rouvrir si un vrai cas se presente). Pas d'update/delete sur un
    * Payment une fois cree : un fait financier ne se modifie/supprime pas,
    * meme raisonnement que l'AuditLog de la Section 30bis.
+   *
+   * Statut et solde sont lus SOUS VERROU (lockInvoice) : deux paiements
+   * simultanes ne peuvent plus depasser le total a eux deux.
    */
   async recordPayment(garageId: string, actorId: string, workOrderId: string, dto: CreatePaymentDto) {
     await this.getWorkOrder(garageId, workOrderId);
-    const invoice = await this.getInvoiceOrThrow(workOrderId);
-
-    if (invoice.status !== InvoiceStatus.ISSUED && invoice.status !== InvoiceStatus.PARTIALLY_PAID) {
-      throw new BadRequestException('Cette facture ne peut pas recevoir de paiement dans son etat actuel.');
-    }
-
-    const paid = await this.prisma.payment.aggregate({
-      where: { invoiceId: invoice.id },
-      _sum: { amount: true },
-    });
-    const alreadyPaid = paid._sum.amount ?? new Prisma.Decimal(0);
-    const amount = new Prisma.Decimal(dto.amount);
-    const newTotalPaid = alreadyPaid.plus(amount);
-
-    if (newTotalPaid.greaterThan(invoice.totalPrice)) {
-      throw new BadRequestException('Le montant depasse le solde restant du sur cette facture.');
-    }
-
-    const newStatus = newTotalPaid.equals(invoice.totalPrice)
-      ? InvoiceStatus.PAID
-      : InvoiceStatus.PARTIALLY_PAID;
 
     return this.prisma.$transaction(async (tx) => {
+      const invoice = await this.lockInvoice(tx, workOrderId);
+
+      if (invoice.status !== InvoiceStatus.ISSUED && invoice.status !== InvoiceStatus.PARTIALLY_PAID) {
+        throw new BadRequestException('Cette facture ne peut pas recevoir de paiement dans son etat actuel.');
+      }
+
+      const alreadyPaid = await this.sumPayments(tx, invoice.id);
+      const amount = new Prisma.Decimal(dto.amount);
+      const newTotalPaid = alreadyPaid.plus(amount);
+
+      if (newTotalPaid.greaterThan(invoice.totalPrice)) {
+        throw new BadRequestException('Le montant depasse le solde restant du sur cette facture.');
+      }
+
+      const newStatus = newTotalPaid.equals(invoice.totalPrice)
+        ? InvoiceStatus.PAID
+        : InvoiceStatus.PARTIALLY_PAID;
+
       const payment = await tx.payment.create({
         data: {
           garageId,

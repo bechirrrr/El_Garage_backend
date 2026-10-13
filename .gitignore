@@ -4,6 +4,7 @@ node_modules/
 # Build
 dist/
 build/
+*.tsbuildinfo
 
 # Environment variables
 # NEVER commit secrets, passwords, API keys, etc.
@@ -32,4 +33,4 @@ prisma/*.db-journal
 src/generated/
 
 # Coverage
-coverage/
+coverage/

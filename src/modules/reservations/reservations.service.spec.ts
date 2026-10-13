@@ -131,6 +131,28 @@ describe('ReservationsService visibilite Mecanicien (Section 33)', () => {
 
     expect(calls[0].where.assignedMechanicId).toBeUndefined();
   });
+
+  it('combine filtres client / vehicule / statut avec le garage et la regle MECHANIC', async () => {
+    const calls: any[] = [];
+    const prisma = makePrismaMock({
+      reservation: { findMany: (args: any) => (calls.push(args), Promise.resolve([])) },
+    });
+    const service = new ReservationsService(prisma);
+
+    await service.findAllForGarage('garage-1', 'mechanic-1', 'MECHANIC' as any, {
+      customerId: 'c-1',
+      vehicleId: 'v-1',
+      status: 'PENDING' as any,
+    });
+
+    expect(calls[0].where).toEqual({
+      garageId: 'garage-1',
+      customerId: 'c-1',
+      vehicleId: 'v-1',
+      status: 'PENDING',
+      assignedMechanicId: 'mechanic-1',
+    });
+  });
 });
 
 describe('ReservationsService.updateStatus', () => {

@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards, Query } from '@nestjs/common';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
 import { Roles } from '../../common/decorators/roles.decorator.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
@@ -8,6 +8,7 @@ import { Role } from '../../generated/prisma/client.js';
 import { CreateVehicleDto } from './dto/create-vehicle.dto.js';
 import { UpdateVehicleDto } from './dto/update-vehicle.dto.js';
 import { VehiclesService } from './vehicles.service.js';
+import { ListFilterDto } from '../../common/dto/list-filter.dto.js';
 
 /**
  * Permissions (Section 19/20/29) :
@@ -31,8 +32,8 @@ export class VehiclesController {
 
   @Get()
   @Roles(Role.ADMIN, Role.FRONT_DESK, Role.MECHANIC)
-  findAll(@CurrentUser() user: CurrentUserPayload) {
-    return this.vehiclesService.findAllForGarage(user.garageId as string);
+  findAll(@CurrentUser() user: CurrentUserPayload, @Query() filter: ListFilterDto) {
+    return this.vehiclesService.findAllForGarage(user.garageId as string, filter);
   }
 
   @Get(':id')

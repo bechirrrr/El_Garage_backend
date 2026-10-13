@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, UseGuards, Query } from '@nestjs/common';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
 import { Roles } from '../../common/decorators/roles.decorator.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
@@ -10,6 +10,7 @@ import { CreateWorkOrderDto } from './dto/create-work-order.dto.js';
 import { UpdateWorkOrderStatusDto } from './dto/update-work-order-status.dto.js';
 import { UpdateWorkOrderDto } from './dto/update-work-order.dto.js';
 import { WorkOrdersService } from './work-orders.service.js';
+import { ListFilterDto } from '../../common/dto/list-filter.dto.js';
 
 /**
  * Permissions (Sections 18-20-29) :
@@ -43,8 +44,8 @@ export class WorkOrdersController {
 
   @Get()
   @Roles(Role.ADMIN, Role.FRONT_DESK, Role.MECHANIC)
-  findAll(@CurrentUser() user: CurrentUserPayload) {
-    return this.workOrdersService.findAllForGarage(user.garageId as string, user.role);
+  findAll(@CurrentUser() user: CurrentUserPayload, @Query() filter: ListFilterDto) {
+    return this.workOrdersService.findAllForGarage(user.garageId as string, user.role, filter);
   }
 
   @Get(':id')

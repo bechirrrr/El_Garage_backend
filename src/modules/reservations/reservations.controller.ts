@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, UseGuards, Query } from '@nestjs/common';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
 import { Roles } from '../../common/decorators/roles.decorator.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
@@ -10,6 +10,7 @@ import { CreateReservationDto } from './dto/create-reservation.dto.js';
 import { UpdateReservationStatusDto } from './dto/update-reservation-status.dto.js';
 import { UpdateReservationDto } from './dto/update-reservation.dto.js';
 import { ReservationsService } from './reservations.service.js';
+import { ReservationListFilterDto } from './dto/reservation-list-filter.dto.js';
 
 /**
  * PAS imbrique sous /work-orders (contrairement a Diagnosis/Task/Part/
@@ -31,8 +32,8 @@ export class ReservationsController {
   constructor(private readonly reservationsService: ReservationsService) {}
 
   @Get()
-  findAll(@CurrentUser() user: CurrentUserPayload) {
-    return this.reservationsService.findAllForGarage(user.garageId as string, user.id, user.role);
+  findAll(@CurrentUser() user: CurrentUserPayload, @Query() filter: ReservationListFilterDto) {
+    return this.reservationsService.findAllForGarage(user.garageId as string, user.id, user.role, filter);
   }
 
   @Get(':id')

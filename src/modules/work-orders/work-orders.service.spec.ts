@@ -369,3 +369,81 @@ describe('WorkOrdersService.create -- numero OR', () => {
     expect(events[0].message).toContain('OR-7');
   });
 });
+
+describe('WorkOrdersService.findAllForGarage -- agregats SQL (taches, statusSince)', () => {
+  const createdAt = new Date('2026-10-01T08:00:00Z');
+  const lastChange = new Date('2026-10-05T10:00:00Z');
+
+  function listMock(captured: Record<string, any>) {
+    return makePrismaMock({
+      workOrder: {
+        findMany: (args: any) => {
+          captured.workOrderWhere = args.where;
+          captured.include = args.include;
+          return Promise.resolve([
+            { id: 'wo-1', createdAt, parts: [{ name: 'Filtre' }] },
+            { id: 'wo-2', createdAt, parts: [] },
+          ]);
+        },
+      },
+      task: {
+        groupBy: (args: any) => {
+          captured.taskWhere = args.where;
+          return Promise.resolve([
+            { workOrderId: 'wo-1', status: 'DONE', _count: { _all: 3 } },
+            { workOrderId: 'wo-1', status: 'TODO', _count: { _all: 2 } },
+          ]);
+        },
+      },
+      activityEvent: {
+        groupBy: (args: any) => {
+          captured.eventWhere = args.where;
+          return Promise.resolve([{ workOrderId: 'wo-1', _max: { createdAt: lastChange } }]);
+        },
+      },
+    });
+  }
+
+  it('calcule tasksTotal / tasksDone / statusSince depuis les GROUP BY', async () => {
+    const captured: Record<string, any> = {};
+    const service = new WorkOrdersService(listMock(captured));
+
+    const [wo1, wo2] = await service.findAllForGarage('garage-1', 'ADMIN' as any);
+
+    expect(wo1).toMatchObject({ tasksTotal: 5, tasksDone: 3, partsOrdered: ['Filtre'], statusSince: lastChange });
+    // Sans tache ni changement de statut : 0/0 et date d'ouverture de l'OR.
+    expect(wo2).toMatchObject({ tasksTotal: 0, tasksDone: 0, partsOrdered: [], statusSince: createdAt });
+    // Plus de chargement des taches / evenements ligne par ligne.
+    expect(captured.include.tasks).toBeUndefined();
+    expect(captured.include.activityEvents).toBeUndefined();
+  });
+
+  it('restreint les agregats au garage et aux OR renvoyes', async () => {
+    const captured: Record<string, any> = {};
+    const service = new WorkOrdersService(listMock(captured));
+
+    await service.findAllForGarage('garage-1', 'ADMIN' as any);
+
+    expect(captured.taskWhere).toEqual({ garageId: 'garage-1', workOrderId: { in: ['wo-1', 'wo-2'] } });
+    expect(captured.eventWhere).toMatchObject({ garageId: 'garage-1', type: 'STATUS_CHANGED' });
+  });
+
+  it('applique ?customerId= / ?vehicleId= en plus du garage', async () => {
+    const captured: Record<string, any> = {};
+    const service = new WorkOrdersService(listMock(captured));
+
+    await service.findAllForGarage('garage-1', 'ADMIN' as any, { customerId: 'c-1', vehicleId: 'v-1' });
+
+    expect(captured.workOrderWhere).toEqual({ garageId: 'garage-1', customerId: 'c-1', vehicleId: 'v-1' });
+  });
+
+  it("ne lance aucun GROUP BY quand la liste est vide", async () => {
+    const service = new WorkOrdersService(
+      makePrismaMock({
+        task: { groupBy: () => Promise.reject(new Error('ne doit pas etre appele')) },
+        activityEvent: { groupBy: () => Promise.reject(new Error('ne doit pas etre appele')) },
+      }),
+    );
+    await expect(service.findAllForGarage('garage-1', 'ADMIN' as any)).resolves.toEqual([]);
+  });
+});

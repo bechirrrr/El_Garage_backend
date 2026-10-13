@@ -4,6 +4,7 @@ import { logActivity } from '../../common/activity-log.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import type { CreateVehicleDto } from './dto/create-vehicle.dto.js';
 import type { UpdateVehicleDto } from './dto/update-vehicle.dto.js';
+import type { ListFilterDto } from '../../common/dto/list-filter.dto.js';
 
 @Injectable()
 export class VehiclesService {
@@ -66,9 +67,10 @@ export class VehiclesService {
   }
 
   /** Vue liste (Section 21 Workshop Overview / Section 25) : visible par tous les roles garage-scoped. */
-  findAllForGarage(garageId: string) {
+  findAllForGarage(garageId: string, filter?: ListFilterDto) {
+    // Un vehicule n'a pas de vehicleId : seul ?customerId= s'applique ici.
     return this.prisma.vehicle.findMany({
-      where: { garageId },
+      where: { garageId, ...(filter?.customerId ? { customerId: filter.customerId } : {}) },
       include: { customer: { select: { id: true, name: true, phone: true } } },
       orderBy: { createdAt: 'desc' },
     });

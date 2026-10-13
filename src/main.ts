@@ -1,10 +1,18 @@
 import 'dotenv/config'; // charge .env AVANT tout le reste
 import { ValidationPipe } from '@nestjs/common';
+import compression from 'compression';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module.js';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+
+  // Compression gzip des reponses (au-dela de 1 Ko). Les listes JSON sont tres
+  // repetitives : GET /work-orders passe de ~1,8 Mo a ~90 Ko pour 3 000 OR,
+  // soit ~20x moins a telecharger pour le navigateur (mesure sur Postgres).
+  // Le navigateur decompresse tout seul (en-tete Accept-Encoding) : rien a
+  // changer cote Angular.
+  app.use(compression());
 
   // Toutes les routes seront prefixees : /api/auth/login, /api/vehicles, ...
   app.setGlobalPrefix('api');

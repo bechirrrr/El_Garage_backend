@@ -28,6 +28,8 @@ function makePrismaMock(overrides: Record<string, any> = {}) {
       findMany: () => Promise.resolve([]),
     },
     activityEvent: { create: () => Promise.resolve({}) },
+    // Verrou SELECT ... FOR UPDATE de lockInvoice : sans effet dans les tests.
+    $queryRaw: () => Promise.resolve([]),
     ...overrides,
   };
   return {
@@ -292,5 +294,118 @@ describe('InvoicesService -- TVA et timbre fiscal', () => {
     expect(data.subtotal.toFixed(3)).toBe('200.005');
     expect(data.vatAmount.toFixed(3)).toBe('14.000'); // 14.00035 arrondi au millime
     expect(data.totalPrice.toFixed(3)).toBe('214.605');
+  });
+});
+
+describe('InvoicesService -- coherence statut / montant (verrou + recalcul)', () => {
+  function paidInvoice(overrides: Record<string, any> = {}) {
+    return {
+      id: 'invoice-1',
+      status: 'PAID',
+      laborPrice: new Prisma.Decimal(200),
+      partsTotal: new Prisma.Decimal(630),
+      totalPrice: new Prisma.Decimal(830),
+      vatRate: new Prisma.Decimal(0),
+      stampDuty: new Prisma.Decimal(0),
+      ...overrides,
+    };
+  }
+
+  it('update : une facture PAID dont le prix augmente redevient PARTIALLY_PAID', async () => {
+    const updates: any[] = [];
+    const prisma = makePrismaMock({
+      invoice: {
+        findUnique: () => Promise.resolve(paidInvoice()),
+        update: (args: any) => (updates.push(args.data), Promise.resolve({ id: args.where.id, ...args.data })),
+      },
+      payment: { aggregate: () => Promise.resolve({ _sum: { amount: new Prisma.Decimal(830) } }) },
+    });
+    const service = new InvoicesService(prisma);
+
+    await service.update('garage-1', 'admin-1', 'wo-1', { laborPrice: 300 });
+
+    expect(updates[0].status).toBe('PARTIALLY_PAID');
+    expect(updates[0].totalPrice.toFixed(3)).toBe('930.000');
+  });
+
+  it('update : rejette un total inferieur au montant deja encaisse', async () => {
+    const prisma = makePrismaMock({
+      invoice: { findUnique: () => Promise.resolve(paidInvoice({ status: 'PARTIALLY_PAID' })) },
+      payment: { aggregate: () => Promise.resolve({ _sum: { amount: new Prisma.Decimal(500) } }) },
+    });
+    const service = new InvoicesService(prisma);
+
+    // 100 + 300 = 400 < 500 deja payes
+    await expect(
+      service.update('garage-1', 'admin-1', 'wo-1', { laborPrice: 100, partsTotal: 300 }),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('update : une facture PARTIALLY_PAID dont le total baisse au montant paye passe PAID', async () => {
+    const updates: any[] = [];
+    const prisma = makePrismaMock({
+      invoice: {
+        findUnique: () => Promise.resolve(paidInvoice({ status: 'PARTIALLY_PAID' })),
+        update: (args: any) => (updates.push(args.data), Promise.resolve({ id: args.where.id, ...args.data })),
+      },
+      payment: { aggregate: () => Promise.resolve({ _sum: { amount: new Prisma.Decimal(730) } }) },
+    });
+    const service = new InvoicesService(prisma);
+
+    await service.update('garage-1', 'admin-1', 'wo-1', { laborPrice: 100 }); // 100 + 630 = 730
+
+    expect(updates[0].status).toBe('PAID');
+  });
+
+  it('update : sans paiement, le statut reste inchange (ISSUED)', async () => {
+    const updates: any[] = [];
+    const prisma = makePrismaMock({
+      invoice: {
+        findUnique: () => Promise.resolve(paidInvoice({ status: 'ISSUED' })),
+        update: (args: any) => (updates.push(args.data), Promise.resolve({ id: args.where.id, ...args.data })),
+      },
+    });
+    const service = new InvoicesService(prisma);
+
+    await service.update('garage-1', 'admin-1', 'wo-1', { laborPrice: 50 });
+
+    expect(updates[0].status).toBe('ISSUED');
+  });
+
+  it('verrouille la ligne de la facture DANS la transaction avant de lire statut et solde', async () => {
+    const calls: string[] = [];
+    const base: any = makePrismaMock({
+      $queryRaw: () => (calls.push('lock'), Promise.resolve([])),
+      invoice: {
+        findUnique: () => (calls.push('read'), Promise.resolve(paidInvoice({ status: 'ISSUED' }))),
+        update: (args: any) => Promise.resolve({ id: args.where.id, ...args.data }),
+      },
+      payment: {
+        aggregate: () => (calls.push('sum'), Promise.resolve({ _sum: { amount: null } })),
+        create: (args: any) => Promise.resolve({ id: 'p', ...args.data }),
+      },
+    });
+    let inTransaction = false;
+    const realTx = base.$transaction;
+    base.$transaction = async (fn: any) => {
+      inTransaction = true;
+      calls.push('tx');
+      return realTx(fn);
+    };
+    const service = new InvoicesService(base);
+
+    await service.recordPayment('garage-1', 'admin-1', 'wo-1', { amount: 100, method: 'CASH' as any });
+
+    expect(inTransaction).toBe(true);
+    expect(calls).toEqual(['tx', 'lock', 'read', 'sum']);
+  });
+
+  it('cancel : refuse si un paiement est passe entre-temps (statut relu sous verrou)', async () => {
+    const prisma = makePrismaMock({
+      invoice: { findUnique: () => Promise.resolve(paidInvoice({ status: 'PARTIALLY_PAID' })) },
+    });
+    const service = new InvoicesService(prisma);
+
+    await expect(service.cancel('garage-1', 'admin-1', 'wo-1')).rejects.toThrow(BadRequestException);
   });
 });

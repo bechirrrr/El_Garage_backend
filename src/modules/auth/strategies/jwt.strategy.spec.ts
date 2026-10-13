@@ -13,8 +13,11 @@ process.env.JWT_SECRET ??= 'test-secret';
  * vrai module NestJS avec une vraie base.
  */
 function makeStrategy(userInDb: any) {
+  // Reproduit le WHERE de validate() : actif ET (OWNER sans garage OU garage ACTIVE).
+  const passesWhere = (u: any) => !!u && u.isActive && (u.garageId === null || u.garage?.status === 'ACTIVE');
   const prisma = {
     user: {
+      findFirst: () => Promise.resolve(passesWhere(userInDb) ? userInDb : null),
       findUnique: () => Promise.resolve(userInDb),
     },
   } as any;
@@ -109,5 +112,44 @@ describe('JwtStrategy.validate', () => {
     await expect(
       strategy.validate({ sub: 'owner-1', garageId: null, role: 'OWNER' }),
     ).resolves.toEqual({ id: 'owner-1', garageId: null, role: 'OWNER' });
+  });
+
+  it('transmet mustChangePassword dans req.user (impose ensuite par JwtAuthGuard)', async () => {
+    const strategy = makeStrategy({
+      id: 'meca-1',
+      garageId: 'garage-1',
+      role: 'MECHANIC',
+      isActive: true,
+      mustChangePassword: true,
+      garage: { status: 'ACTIVE' },
+    });
+    const user = await strategy.validate({ sub: 'meca-1', garageId: 'garage-1', role: 'MECHANIC' });
+    expect(user.mustChangePassword).toBe(true);
+  });
+
+  it('chemin normal : une seule requete, filtre actif + garage ACTIVE dans le WHERE', async () => {
+    const calls: any[] = [];
+    const prisma = {
+      user: {
+        findFirst: (args: any) => (calls.push(args), Promise.resolve({ id: 'u-1', garageId: 'g-1', role: 'ADMIN', mustChangePassword: false })),
+        findUnique: () => Promise.reject(new Error('ne doit pas etre appele')),
+      },
+    } as any;
+    const strategy = new JwtStrategy(prisma);
+
+    await strategy.validate(payload);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].where).toEqual({
+      id: 'user-1',
+      isActive: true,
+      OR: [{ garageId: null }, { garage: { status: 'ACTIVE' } }],
+    });
+    expect(Object.keys(calls[0].select)).not.toContain('passwordHash');
+  });
+
+  it("message 'garage' (et non 'compte') quand seul le garage est suspendu", async () => {
+    const strategy = makeStrategy({ id: 'user-1', garageId: 'garage-1', role: 'ADMIN', isActive: true, garage: { status: 'SUSPENDED' } });
+    await expect(strategy.validate(payload)).rejects.toThrow("L'acces a ce garage n'est plus autorise.");
   });
 });

@@ -7,6 +7,8 @@ import type { ConvertReservationDto } from './dto/convert-reservation.dto.js';
 import type { CreateReservationDto } from './dto/create-reservation.dto.js';
 import type { UpdateReservationStatusDto } from './dto/update-reservation-status.dto.js';
 import type { UpdateReservationDto } from './dto/update-reservation.dto.js';
+import { listFilterWhere } from '../../common/dto/list-filter.dto.js';
+import type { ReservationListFilterDto } from './dto/reservation-list-filter.dto.js';
 
 /**
  * Meme forme minimale que WorkOrdersService.EventWriter : tolere aussi bien
@@ -77,10 +79,12 @@ export class ReservationsService {
    * plutot qu'un rejet apres coup -- un Mecanicien ne doit meme pas savoir
    * qu'une reservation non-assignee existe.
    */
-  findAllForGarage(garageId: string, userId: string, userRole: Role) {
+  findAllForGarage(garageId: string, userId: string, userRole: Role, filter?: ReservationListFilterDto) {
     return this.prisma.reservation.findMany({
       where: {
         garageId,
+        ...listFilterWhere(filter),
+        ...(filter?.status ? { status: filter.status } : {}),
         ...(userRole === Role.MECHANIC ? { assignedMechanicId: userId } : {}),
       },
       include: {
